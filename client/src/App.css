@@ -1,0 +1,183 @@
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: #1a1a1a;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+.app-header {
+  padding: 20px;
+  background-color: #2d2d2d;
+  border-bottom: 1px solid #404040;
+  text-align: center;
+}
+
+.app-header h1 {
+  margin: 0 0 8px 0;
+  font-size: 2rem;
+  color: #6b9bd6;
+}
+
+.app-header p {
+  margin: 0;
+  color: #cccccc;
+  font-size: 0.9rem;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.left-panel {
+  width: 350px;
+  background-color: #262626;
+  border-right: 1px solid #404040;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 20px;
+  overflow-y: auto;
+}
+
+.right-panel {
+  flex: 1;
+  background-color: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-section {
+  background-color: #333333;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #404040;
+}
+
+.panel-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 1.1rem;
+  color: #6b9bd6;
+}
+
+.file-upload-area {
+  border: 2px dashed #666;
+  border-radius: 8px;
+  padding: 30px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.file-upload-area:hover {
+  border-color: #6b9bd6;
+  background-color: rgba(107, 155, 214, 0.1);
+}
+
+.file-upload-area.has-file {
+  border-color: #6b9bd6;
+  background-color: rgba(107, 155, 214, 0.2);
+}
+
+.dimension-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dimension-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dimension-input label {
+  width: 20px;
+  font-weight: bold;
+  color: #6b9bd6;
+}
+
+.dimension-input input {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #2d2d2d;
+  color: #ffffff;
+}
+
+.dimension-input span {
+  color: #cccccc;
+  font-size: 0.9rem;
+}
+
+.process-button {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 6px;
+  background-color: #5a8bc4;
+  color: white;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.process-button:hover:not(:disabled) {
+  background-color: #4a7ab3;
+}
+
+.process-button:disabled {
+  background-color: #666;
+  cursor: not-allowed;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background-color: #333;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #5a8bc4;
+  transition: width 0.3s ease;
+}
+
+.status-text {
+  font-size: 0.9rem;
+  color: #cccccc;
+  text-align: center;
+}
+
+.preview-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+}
+
+.select-button {
+  background-color: #555;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-top: 8px;
+}
+
+.select-button:hover {
+  background-color: #666;
+}

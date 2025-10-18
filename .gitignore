@@ -1,0 +1,29 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+build/
+dist/
+coverage/
+*.tgz
+
+# Python
+__pycache__/
+*.pyc
+*.pyd
+.Python
+venv/
+.venv/
+env/
+.env/
+
+# Editor/OS specific
+.DS_Store # macOS
+.vscode/ # VS Code
+.idea/ # IntelliJ/PyCharm
+Thumbs.db # Windows
+
+*.stl
+out/
