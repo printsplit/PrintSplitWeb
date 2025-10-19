@@ -6,7 +6,7 @@
 set -e
 
 echo "🚀 Starting PrintSplit Web..."
-
+export NODE_OPTIONS="--max-old-space-size=4096"
 # Check if .env file exists
 if [ ! -f .env ]; then
     echo "⚠️  .env file not found. Creating from .env.example..."
@@ -40,10 +40,11 @@ fi
 # Create data directories
 echo "📁 Creating data directories..."
 mkdir -p data/minio data/redis temp/uploads temp/processing
+chmod -R 777 temp/
 
 # Start Docker services
 echo "🐳 Starting Docker services..."
-docker-compose up -d
+docker compose up -d
 
 # Wait for services to be healthy
 echo "⏳ Waiting for services to be ready..."
@@ -51,7 +52,7 @@ sleep 5
 
 # Check MinIO
 echo "🔍 Checking MinIO..."
-until docker-compose exec -T minio mc alias ls > /dev/null 2>&1; do
+until docker compose exec -T minio mc alias ls > /dev/null 2>&1; do
     echo "   Waiting for MinIO..."
     sleep 2
 done
@@ -59,7 +60,7 @@ echo "✅ MinIO is ready"
 
 # Check Redis
 echo "🔍 Checking Redis..."
-until docker-compose exec -T redis redis-cli ping > /dev/null 2>&1; do
+until docker compose exec -T redis redis-cli ping > /dev/null 2>&1; do
     echo "   Waiting for Redis..."
     sleep 2
 done
