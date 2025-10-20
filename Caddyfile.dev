@@ -1,0 +1,60 @@
+# Caddy configuration for local development
+# No SSL, just HTTP on localhost
+
+localhost, localhost:80 {
+    # File size limits for uploads
+    request_body {
+        max_size 100MB
+    }
+
+    # API reverse proxy
+    handle /api/* {
+        reverse_proxy api:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # MinIO storage proxy
+    handle /storage/* {
+        uri strip_prefix /storage
+        reverse_proxy minio:9000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # React app at /core
+    handle /core* {
+        root * /usr/share/caddy/app
+        uri strip_prefix /core
+        try_files {path} /index.html
+        file_server
+
+        # No caching in development
+        header Cache-Control "no-cache, no-store, must-revalidate"
+    }
+
+    # Landing page (website) - root
+    handle {
+        root * /usr/share/caddy/website
+        try_files {path} /index.html
+        file_server
+
+        # No caching in development
+        header Cache-Control "no-cache, no-store, must-revalidate"
+    }
+
+    # Access logs
+    log {
+        output stdout
+        format console
+    }
+}
