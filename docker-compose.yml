@@ -60,6 +60,7 @@ services:
       RESULTS_BUCKET: results
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-100MB}
       JOB_RETENTION_HOURS: ${JOB_RETENTION_HOURS:-48}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
     depends_on:
       redis:
         condition: service_healthy

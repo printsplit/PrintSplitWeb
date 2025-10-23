@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { QueueStatus } from './QueueStatus';
 
 interface ProcessingState {
   isProcessing: boolean;
@@ -37,6 +38,35 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
   lastResult,
   jobId
 }) => {
+  const [jobState, setJobState] = useState<string | null>(null);
+
+  // Poll for job state while processing
+  useEffect(() => {
+    if (!jobId || !processing.isProcessing) {
+      setJobState(null);
+      return;
+    }
+
+    const fetchJobState = async () => {
+      try {
+        const response = await fetch(`/api/jobs/${jobId}`);
+        if (response.ok) {
+          const data = await response.json();
+          setJobState(data.state);
+        }
+      } catch (error) {
+        console.error('Failed to fetch job state:', error);
+      }
+    };
+
+    // Fetch immediately
+    fetchJobState();
+
+    // Then poll every 2 seconds
+    const interval = setInterval(fetchJobState, 2000);
+    return () => clearInterval(interval);
+  }, [jobId, processing.isProcessing]);
+
   const handleDownloadAll = () => {
     if (jobId) {
       const url = `${import.meta.env.VITE_API_URL || '/api'}/download/${jobId}/all`;
@@ -77,6 +107,11 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
       <div className="status-text">
         {processing.status}
       </div>
+
+      {/* Show queue position if job is waiting */}
+      {processing.isProcessing && jobId && (
+        <QueueStatus jobId={jobId} jobState={jobState} />
+      )}
 
       {lastResult && lastResult.success && (
         <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#2d4a2d', borderRadius: '6px', border: '1px solid #6b9bd6' }}>

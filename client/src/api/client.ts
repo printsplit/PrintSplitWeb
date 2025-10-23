@@ -161,6 +161,91 @@ class PrintSplitAPI {
       throw new Error(error.error || 'Failed to cancel job');
     }
   }
+
+  /**
+   * Get job's position in queue
+   */
+  async getQueuePosition(jobId: string): Promise<{
+    id: string;
+    state: string;
+    position: number | null;
+    totalWaiting: number;
+    estimatedWaitTime: number;
+    message?: string;
+  }> {
+    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/position`);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get queue position');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Admin: Login
+   */
+  async adminLogin(password: string): Promise<{ success: boolean; token: string; message: string }> {
+    const response = await fetch(`${API_BASE_URL}/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Login failed');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Admin: Get comprehensive stats
+   */
+  async getAdminStats(token: string): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/admin/stats`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get admin stats');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Admin: Get job list
+   */
+  async getAdminJobs(
+    token: string,
+    state?: 'waiting' | 'active' | 'completed' | 'failed',
+    limit?: number
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (state) params.append('state', state);
+    if (limit) params.append('limit', limit.toString());
+
+    const url = `${API_BASE_URL}/admin/jobs${params.toString() ? '?' + params.toString() : ''}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get jobs list');
+    }
+
+    return response.json();
+  }
 }
 
 // Export singleton instance
