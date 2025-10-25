@@ -81,17 +81,58 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
+  const handleCancelJob = async () => {
+    if (!jobId) return;
+
+    if (!confirm('Are you sure you want to cancel this job?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        window.location.reload(); // Reload to reset state
+      }
+    } catch (error) {
+      console.error('Failed to cancel job:', error);
+    }
+  };
+
   return (
     <div className="panel-section">
       <h3>Processing</h3>
 
-      <button
-        className="process-button"
-        onClick={onProcess}
-        disabled={!canProcess}
-      >
-        {processing.isProcessing ? 'Processing...' : 'Split STL File'}
-      </button>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button
+          className="process-button"
+          onClick={onProcess}
+          disabled={!canProcess}
+          style={{ flex: 1 }}
+        >
+          {processing.isProcessing ? 'Processing...' : 'Split STL File'}
+        </button>
+
+        {processing.isProcessing && jobId && (
+          <button
+            onClick={handleCancelJob}
+            style={{
+              padding: '12px 16px',
+              background: '#dc3545',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+            }}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
 
       {processing.isProcessing && (
         <div style={{ marginTop: '12px' }}>

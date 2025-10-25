@@ -23,9 +23,20 @@ interface ActiveJob {
   progress: number;
   startedAt: number;
   data: {
-    filename: string;
+    fileName: string;
     dimensions: any;
   };
+}
+
+interface SystemHealth {
+  redis: boolean;
+  minio: boolean;
+  workers: {
+    active: number;
+    healthy: boolean;
+    lastActivity: number | null;
+  };
+  timestamp: number;
 }
 
 interface AdminStats {
@@ -37,6 +48,7 @@ interface AdminStats {
 
 export function AdminDashboard() {
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [health, setHealth] = useState<SystemHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const { isAuthenticated, token, logout } = useAuth();
@@ -48,19 +60,22 @@ export function AdminDashboard() {
     }
   }, [isAuthenticated]);
 
-  // Fetch stats
+  // Fetch stats and health
   const fetchStats = async () => {
     if (!token) return;
 
     try {
-      const response = await fetch('/api/admin/stats', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      const [statsRes, healthRes] = await Promise.all([
+        fetch('/api/admin/stats', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        }),
+        fetch('/api/admin/system-health', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        }),
+      ]);
 
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
+      if (!statsRes.ok) {
+        if (statsRes.status === 401 || statsRes.status === 403) {
           logout();
           navigate('/admin/login');
           return;
@@ -68,8 +83,14 @@ export function AdminDashboard() {
         throw new Error('Failed to fetch stats');
       }
 
-      const data = await response.json();
-      setStats(data);
+      const statsData = await statsRes.json();
+      setStats(statsData);
+
+      if (healthRes.ok) {
+        const healthData = await healthRes.json();
+        setHealth(healthData);
+      }
+
       setError('');
     } catch (err: any) {
       setError(err.message || 'Failed to load stats');
@@ -85,6 +106,63 @@ export function AdminDashboard() {
     const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
   }, [token]);
+
+  const handleKillJob = async (jobId: string) => {
+    if (!token) return;
+
+    if (!confirm(`Are you sure you want to kill job ${jobId.substring(0, 8)}...?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/admin/jobs/${jobId}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to kill job');
+      }
+
+      // Refresh stats immediately after killing
+      fetchStats();
+    } catch (err: any) {
+      alert(`Failed to kill job: ${err.message}`);
+      console.error('Kill job error:', err);
+    }
+  };
+
+  const handleRestartWorker = async () => {
+    if (!token) return;
+
+    if (!confirm('⚠️ WARNING: This will restart the worker and cancel all active jobs. The worker will restart within 10 seconds. Are you sure?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/admin/worker/restart', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to restart worker');
+      }
+
+      const data = await response.json();
+      alert(data.message || 'Worker restart signal sent. It will restart within 10 seconds.');
+      // Refresh stats after a delay
+      setTimeout(fetchStats, 12000);
+    } catch (err: any) {
+      alert(`Failed to restart worker: ${err.message}`);
+      console.error('Restart worker error:', err);
+    }
+  };
 
   const formatTime = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -175,6 +253,78 @@ export function AdminDashboard() {
 
       {stats && (
         <>
+          {/* System Health Status */}
+          {health && (
+            <div style={{
+              background: 'white',
+              padding: '1rem',
+              borderRadius: '8px',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              marginBottom: '2rem',
+              display: 'flex',
+              gap: '2rem',
+              alignItems: 'center',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  background: health.redis ? '#28a745' : '#dc3545',
+                }} />
+                <span style={{ fontSize: '0.875rem', color: '#666' }}>Redis</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  background: health.minio ? '#28a745' : '#dc3545',
+                }} />
+                <span style={{ fontSize: '0.875rem', color: '#666' }}>MinIO</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  background: health.workers.healthy ? '#28a745' : '#dc3545',
+                }} />
+                <span style={{ fontSize: '0.875rem', color: '#666' }}>
+                  Workers ({health.workers.active} active)
+                </span>
+              </div>
+              {!health.workers.healthy && (
+                <span style={{
+                  fontSize: '0.75rem',
+                  color: '#dc3545',
+                  fontWeight: 'bold',
+                }}>
+                  ⚠️ Workers may be down!
+                </span>
+              )}
+              <button
+                onClick={handleRestartWorker}
+                style={{
+                  marginLeft: 'auto',
+                  padding: '0.5rem 1rem',
+                  background: '#ff9800',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f57c00'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#ff9800'}
+                title="Signal worker to restart (active jobs will be cancelled, restarts within 10 seconds)"
+              >
+                🔄 Restart Worker
+              </button>
+            </div>
+          )}
+
           {/* Queue Stats Cards */}
           <div style={{
             display: 'grid',
@@ -254,6 +404,9 @@ export function AdminDashboard() {
                       <th style={{ padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', color: '#666' }}>
                         Running Time
                       </th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', color: '#666' }}>
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -263,7 +416,7 @@ export function AdminDashboard() {
                           {job.id.substring(0, 8)}...
                         </td>
                         <td style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
-                          {job.data.filename}
+                          {job.data.fileName}
                         </td>
                         <td style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -286,6 +439,24 @@ export function AdminDashboard() {
                         </td>
                         <td style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
                           {formatDuration(Date.now() - job.startedAt)}
+                        </td>
+                        <td style={{ padding: '0.75rem' }}>
+                          <button
+                            onClick={() => handleKillJob(job.id)}
+                            style={{
+                              padding: '0.375rem 0.75rem',
+                              fontSize: '0.75rem',
+                              background: '#dc3545',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#c82333'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = '#dc3545'}
+                          >
+                            Kill
+                          </button>
                         </td>
                       </tr>
                     ))}

@@ -19,6 +19,12 @@ export const processingQueue = new Bull<ProcessingJobData>('stl-processing', RED
       age: 7 * 24 * 3600, // Keep failed jobs for 7 days
     },
   },
+  settings: {
+    lockDuration: 600000, // 10 minutes - allow long processing for large STL files
+    lockRenewTime: 30000, // Renew lock every 30 seconds to keep job alive
+    stalledInterval: 60000, // Check for stalled jobs every 60 seconds
+    maxStalledCount: 2, // Allow job to stall twice before giving up
+  },
 });
 
 // Queue event listeners

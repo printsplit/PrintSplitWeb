@@ -200,20 +200,6 @@ export function HomePage() {
         <div className="left-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h2 style={{ margin: 0, color: '#6b9bd6', fontSize: '1.5rem' }}>PrintSplit</h2>
-            <a
-              href="/core/admin/login"
-              style={{
-                fontSize: '0.75rem',
-                color: '#888',
-                textDecoration: 'none',
-                padding: '4px 8px',
-                border: '1px solid #444',
-                borderRadius: '3px',
-              }}
-              title="Admin Dashboard"
-            >
-              Admin
-            </a>
           </div>
           <FileUpload
             onFileSelect={handleFileSelect}

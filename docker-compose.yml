@@ -47,6 +47,8 @@ services:
     container_name: printsplit-api
     ports:
       - "3000:3000"
+    volumes:
+      - ./temp/uploads:/tmp/uploads
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
@@ -61,13 +63,14 @@ services:
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-100MB}
       JOB_RETENTION_HOURS: ${JOB_RETENTION_HOURS:-48}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_WINDOW_MINUTES: ${RATE_LIMIT_WINDOW_MINUTES:-15}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-200}
     depends_on:
       redis:
         condition: service_healthy
       minio:
         condition: service_healthy
-    volumes:
-      - ./temp/uploads:/tmp/uploads
     restart: unless-stopped
     networks:
       - printsplit-network
@@ -78,7 +81,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
     container_name: printsplit-worker
-    command: npm run worker
+    command: node --max-old-space-size=4096 --wasm_max_mem_pages=65536 dist/worker/index.js
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       REDIS_URL: redis://redis:6379

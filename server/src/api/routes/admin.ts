@@ -175,11 +175,23 @@ router.post('/jobs/:id/cancel', authenticateAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    await job.remove();
+    const state = await job.getState();
+
+    if (state === 'active') {
+      // Set cancellation flag in job data
+      const jobData = job.data;
+      jobData._cancelled = true;
+      await job.update(jobData);
+      console.log(`⚠️  Admin set cancellation flag for active job ${id}`);
+    } else {
+      // For waiting/delayed jobs, just remove them
+      await job.remove();
+      console.log(`⚠️  Admin removed ${state} job ${id}`);
+    }
 
     res.json({
       success: true,
-      message: `Job ${id} cancelled successfully`,
+      message: `Job ${id} cancellation initiated`,
     });
   } catch (error: any) {
     console.error('Admin job cancel error:', error);
@@ -220,6 +232,104 @@ router.get('/queue-details', authenticateAdmin, async (req, res) => {
   } catch (error: any) {
     console.error('Queue details error:', error);
     res.status(500).json({ error: error.message || 'Failed to get queue details' });
+  }
+});
+
+/**
+ * GET /api/admin/system-health
+ * Get system health status (Redis, MinIO, Workers)
+ */
+router.get('/system-health', authenticateAdmin, async (req, res) => {
+  try {
+    const health = {
+      redis: false,
+      minio: false,
+      workers: {
+        active: 0,
+        healthy: false,
+        lastActivity: null as number | null,
+      },
+      timestamp: Date.now(),
+    };
+
+    // Check Redis connection
+    try {
+      await processingQueue.client.ping();
+      health.redis = true;
+    } catch (error) {
+      console.error('Redis health check failed:', error);
+    }
+
+    // Check MinIO - try to get storage service
+    try {
+      const { getStorageClient } = await import('../../storage/minio-client');
+      const storage = getStorageClient();
+      // Simple check - MinIO client exists
+      health.minio = !!storage;
+    } catch (error) {
+      console.error('MinIO health check failed:', error);
+    }
+
+    // Check workers by looking at active jobs
+    try {
+      const activeJobs = await processingQueue.getActive();
+      health.workers.active = activeJobs.length;
+
+      // If there are active jobs, workers are processing
+      if (activeJobs.length > 0) {
+        health.workers.healthy = true;
+        // Find most recent job start time
+        const mostRecent = activeJobs.reduce((latest, job) => {
+          return job.processedOn && job.processedOn > latest ? job.processedOn : latest;
+        }, 0);
+        health.workers.lastActivity = mostRecent || null;
+      } else {
+        // Check if there are waiting jobs - if yes but no active, workers might be down
+        const waitingCount = await processingQueue.getWaitingCount();
+        const recentCompleted = await processingQueue.getCompleted(0, 0);
+
+        if (waitingCount > 0 && recentCompleted.length === 0) {
+          // Jobs waiting but nothing recently completed - potential issue
+          health.workers.healthy = false;
+        } else {
+          // No jobs waiting, or jobs were recently completed
+          health.workers.healthy = true;
+          if (recentCompleted.length > 0 && recentCompleted[0].finishedOn) {
+            health.workers.lastActivity = recentCompleted[0].finishedOn;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Worker health check failed:', error);
+    }
+
+    res.json(health);
+  } catch (error: any) {
+    console.error('System health check error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get system health' });
+  }
+});
+
+/**
+ * POST /api/admin/worker/restart
+ * Signal the worker to restart via Redis flag
+ */
+router.post('/worker/restart', authenticateAdmin, async (req, res) => {
+  try {
+    console.log('⚠️  Admin initiated worker restart signal');
+
+    // Set restart flag in Redis with 60 second expiry
+    await processingQueue.client.setex('worker:restart', 60, Date.now().toString());
+
+    res.json({
+      success: true,
+      message: 'Worker restart signal sent. Worker will restart within 10 seconds.',
+    });
+  } catch (error: any) {
+    console.error('Worker restart error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to signal worker restart',
+    });
   }
 });
 

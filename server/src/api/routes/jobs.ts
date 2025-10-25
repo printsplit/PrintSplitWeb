@@ -53,11 +53,29 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await cancelJob(id);
+    const job = await getJobStatus(id);
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const state = await job.getState();
+
+    if (state === 'active') {
+      // Set cancellation flag in job data
+      const jobData = job.data;
+      jobData._cancelled = true;
+      await job.update(jobData);
+      console.log(`⚠️  User set cancellation flag for active job ${id}`);
+    } else {
+      // For waiting/delayed jobs, just remove them
+      await cancelJob(id);
+      console.log(`⚠️  User removed ${state} job ${id}`);
+    }
 
     res.json({
       success: true,
-      message: 'Job cancelled/deleted',
+      message: 'Job cancellation initiated',
     });
   } catch (error: any) {
     console.error('Job deletion error:', error);
