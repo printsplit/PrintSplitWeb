@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=Y-NNNNNNNNNN"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'X-YYYYYYYYYY');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrintSplit - Split Large STL Files for 3D Printing</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="images/favicon.png">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="#">
+                <i class="bi bi-box-seam me-2 fs-4"></i>
+                <span class="fw-bold">PrintSplit</span>
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="#features">Features</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#how-it-works">How It Works</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#download">Launch PrintSplit</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="https://github.com/printsplit/PrintSplitWeb" target="_blank">
+                            <i class="bi bi-github"></i> GitHub
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="container">
+            <div class="row align-items-center min-vh-100">
+                <div class="col-lg-6">
+                    <div class="hero-content">
+                        <h1 class="display-3 fw-bold mb-4 text-white">
+                            Split Large 3D Models for Any Printer
+                        </h1>
+                        <p class="lead text-white-50 mb-5">
+                            PrintSplit intelligently divides large STL files into printable sections,
+                            complete with alignment holes for perfect assembly. Print bigger than your build volume!
+                        </p>
+                        <div class="d-flex gap-3 flex-wrap">
+                            <a href="/core" class="btn btn-hero-cta btn-lg px-4 py-3">
+                                <i class="bi bi-box-seam me-2"></i>Launch App
+                            </a>
+                            <a href="#features" class="btn btn-outline-light btn-lg px-4 py-3">
+                                Learn More
+                            </a>
+                        </div>
+                        <div class="mt-4 d-flex gap-4 text-white-50">
+                            <div>
+                                <i class="bi bi-check-circle-fill text-white me-2"></i>
+                                <span>Free & Open Source</span>
+                            </div>
+                            <div>
+                                <i class="bi bi-check-circle-fill text-white me-2"></i>
+                                <span>Cross-Platform</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="hero-image">
+                        <img src="images/screenshot1.png" alt="PrintSplit Application Screenshot" class="img-fluid rounded-4 shadow-lg">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="hero-wave">
+            <svg viewBox="0 0 1200 120" preserveAspectRatio="none">
+                <path d="M321.39,56.44c58-10.79,114.16-30.13,172-41.86,82.39-16.72,168.19-17.73,250.45-.39C823.78,31,906.67,72,985.66,92.83c70.05,18.48,146.53,26.09,214.34,3V0H0V27.35A600.21,600.21,0,0,0,321.39,56.44Z"></path>
+            </svg>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="py-5 bg-light">
+        <div class="container py-5">
+            <div class="text-center mb-5">
+                <h2 class="display-4 fw-bold">Powerful Features</h2>
+                <p class="lead text-muted">Everything you need to split and print large 3D models</p>
+            </div>
+
+            <div class="row g-4">
+                <!-- Feature 1 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-primary">
+                            <i class="bi bi-scissors"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Smart Splitting</h3>
+                        <p class="text-muted">
+                            Automatically divides models into configurable cube sizes with smart boundary
+                            detection to prevent floating parts.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Feature 2 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-success">
+                            <i class="bi bi-bullseye"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Alignment Holes</h3>
+                        <p class="text-muted">
+                            Strategic hole placement for filament pins ensures perfect part alignment
+                            during assembly. Configurable density (sparse/normal/dense).
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Feature 3 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-info">
+                            <i class="bi bi-eye"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Real-Time Preview</h3>
+                        <p class="text-muted">
+                            Interactive 3D visualization with color-coded cut lines shows exactly
+                            how your model will be split before processing.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Feature 4 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-warning">
+                            <i class="bi bi-lightning-charge"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Fast Processing</h3>
+                        <p class="text-muted">
+                            Powered by Manifold-3D WebAssembly for blazing-fast mesh operations
+                            with reliable boolean geometry.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Feature 5 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-danger">
+                            <i class="bi bi-sliders"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Fully Configurable</h3>
+                        <p class="text-muted">
+                            Adjust cube dimensions, hole diameter/depth, enable balanced cutting,
+                            and customize every aspect of the split.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Feature 6 -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="feature-card h-100">
+                        <div class="feature-icon bg-secondary">
+                            <i class="bi bi-save"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Settings Persistence</h3>
+                        <p class="text-muted">
+                            Your preferences are automatically saved and restored, so you don't
+                            have to reconfigure settings every time.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works Section -->
+    <section id="how-it-works" class="py-5">
+        <div class="container py-5">
+            <div class="text-center mb-5">
+                <h2 class="display-4 fw-bold">How It Works</h2>
+                <p class="lead text-muted">Get started in 3 simple steps</p>
+            </div>
+
+            <div class="row g-5">
+                <div class="col-lg-4">
+                    <div class="step-card text-center">
+                        <div class="step-number">1</div>
+                        <div class="step-icon">
+                            <i class="bi bi-file-earmark-arrow-up"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Upload STL File</h3>
+                        <p class="text-muted">
+                            Load your large 3D model STL file. The app will analyze
+                            its dimensions and show a preview.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="step-card text-center">
+                        <div class="step-number">2</div>
+                        <div class="step-icon">
+                            <i class="bi bi-gear"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Configure Settings</h3>
+                        <p class="text-muted">
+                            Set your cube dimensions, enable alignment holes, choose spacing
+                            density, and customize other options.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="step-card text-center">
+                        <div class="step-number">3</div>
+                        <div class="step-icon">
+                            <i class="bi bi-download"></i>
+                        </div>
+                        <h3 class="h4 mb-3">Export & Print</h3>
+                        <p class="text-muted">
+                            Process your model and export individual STL files for each part.
+                            Print and assemble with filament pins!
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Technical Specs Section -->
+    <section class="py-5 bg-light">
+        <div class="container py-5">
+            <div class="row align-items-center">
+                <div class="col-lg-6 mb-4 mb-lg-0">
+                    <h2 class="display-5 fw-bold mb-4">Built with Modern Technology</h2>
+                    <p class="lead text-muted mb-4">
+                        SplitPrint leverages cutting-edge web technologies to deliver
+                        a fast, reliable, and cross-platform experience.
+                    </p>
+                    <ul class="list-unstyled">
+                        <li class="mb-3">
+                            <i class="bi bi-check-circle-fill text-success me-2"></i>
+                            <strong>React + TypeScript</strong> - Modern UI framework
+                        </li>
+                        <li class="mb-3">
+                            <i class="bi bi-check-circle-fill text-success me-2"></i>
+                            <strong>Manifold-3D</strong> - Fast WebAssembly mesh processing
+                        </li>
+                        <li class="mb-3">
+                            <i class="bi bi-check-circle-fill text-success me-2"></i>
+                            <strong>Three.js</strong> - Real-time 3D preview rendering
+                        </li>
+                    </ul>
+                </div>
+                <div class="col-lg-6">
+                    <div class="code-preview bg-dark text-light p-4 rounded">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="code-dots">
+                                <span class="dot bg-danger"></span>
+                                <span class="dot bg-warning"></span>
+                                <span class="dot bg-success"></span>
+                            </div>
+                            <span class="ms-3 text-muted">manifold-splitter.ts</span>
+                        </div>
+                        <pre class="mb-0"><code>// Strategic hole placement
+const spacing = 'normal';
+const positions = generatePositions({
+  corners: true,
+  center: true,
+  midpoints: spacing !== 'sparse',
+  thirds: spacing === 'dense'
+});
+
+// Volume-based validation
+const minVolumeRatio = 0.8;
+if (volumeRemoved >= expectedVolume * minVolumeRatio) {
+  manifold = manifold.subtract(cylinder);
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download Section -->
+    <section id="download" class="py-5 bg-gradient-primary text-white">
+        <div class="container py-5 text-center">
+            <h2 class="display-4 fw-bold mb-4">Ready to Get Started?</h2>
+            <p class="lead mb-5">
+                Launch PrintSplit now and start splitting models larger than your build volume.
+            </p>
+
+            <div class="row justify-content-center mb-5">
+                <div class="col-md-6">
+                    <div class="download-card">
+                        <i class="bi bi-box-seam display-3 mb-4"></i>
+                        <h3 class="h4 mb-4">Web Application</h3>
+                        <a href="/core" class="btn btn-light btn-lg w-100 mb-3">
+                            <i class="bi bi-box-seam me-2"></i>Launch PrintSplit
+                        </a>
+                        <small class="text-muted d-block">Works on all platforms • No installation required</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-5">
+                <a href="https://github.com/printsplit/PrintSplitWeb" class="btn btn-outline-light btn-lg" target="_blank">
+                    <i class="bi bi-github me-2"></i>View Source on GitHub
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-dark text-white py-5">
+        <div class="container">
+            <div class="row">
+                <div class="col-lg-4 mb-4 mb-lg-0">
+                    <h5 class="fw-bold mb-3">
+                        <i class="bi bi-box-seam me-2"></i>PrintSplit
+                    </h5>
+                    <p class="text-white-50">
+                        Split large STL files for 3D printing with intelligent alignment and preview.
+                    </p>
+                    <div class="social-links mt-3">
+                        <a href="https://github.com/printsplit/PrintSplitWeb" class="text-white me-3"><i class="bi bi-github fs-5"></i></a>
+                        <a href="https://discord.gg/3GcwAqaPG6" class="text-white"><i class="bi bi-discord fs-5"></i></a>
+                    </div>
+                </div>
+
+                <div class="col-lg-2 col-md-4 mb-4 mb-lg-0">
+                    <h5 class="fw-bold mb-3">Product</h5>
+                    <ul class="list-unstyled">
+                        <li class="mb-2"><a href="#features" class="text-white-50 text-decoration-none">Features</a></li>
+                        <li class="mb-2"><a href="#how-it-works" class="text-white-50 text-decoration-none">How It Works</a></li>
+                        <li class="mb-2"><a href="#download" class="text-white-50 text-decoration-none">Launch PrintSplit</a></li>
+                    </ul>
+                </div>
+
+                <!-- <div class="col-lg-2 col-md-4 mb-4 mb-lg-0">
+                    <h5 class="fw-bold mb-3">Resources</h5>
+                    <ul class="list-unstyled">
+                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Documentation</a></li>
+                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Tutorials</a></li>
+                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">FAQ</a></li>
+                    </ul>
+                </div> -->
+
+                <div class="col-lg-2 col-md-4">
+                    <h5 class="fw-bold mb-3">Community</h5>
+                    <ul class="list-unstyled">
+                        <li class="mb-2"><a href="https://github.com/printsplit/PrintSplitWeb" class="text-white-50 text-decoration-none">GitHub</a></li>
+                        <!-- <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Discord</a></li>
+                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Issues</a></li> -->
+                    </ul>
+                </div>
+            </div>
+
+            <hr class="my-4 bg-white-50">
+
+            <div class="row align-items-center">
+                <div class="col-md-6 text-center text-md-start mb-3 mb-md-0">
+                    <small class="text-white-50">
+                        © 2025 PrintSplit. Open Source under MIT License.
+                    </small>
+                </div>
+                <div class="col-md-6 text-center text-md-end">
+                    <small class="text-white-50">
+                        Made with <i class="bi bi-heart-fill text-danger"></i> for the 3D printing community
+                    </small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Custom JS -->
+    <script src="js/main.js"></script>
+</body>
+</html>

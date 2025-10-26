@@ -232,6 +232,10 @@ export class ManifoldSplitter {
     console.log('Starting Manifold STL splitting...');
     console.log('Options:', options);
 
+    // Track objects that need cleanup (only Manifold objects, not Mesh)
+    let manifold: any = null;
+    let manifoldWithHoles: any = null;
+
     try {
       // Initialize manifold module
       const manifoldModule = await this.initManifold();
@@ -244,16 +248,18 @@ export class ManifoldSplitter {
       // Create manifold from mesh
       console.log('Creating manifold...');
 
-      // Create a mesh object first
+      // Create a mesh object first (Mesh objects don't need .delete(), they're JS objects)
       const meshObj = new manifoldModule.Mesh({
         vertProperties: mesh.vertices,
         triVerts: mesh.triangles,
         numProp: 3
       });
 
-      const manifold = new Manifold(meshObj);
+      manifold = new Manifold(meshObj);
 
       if (manifold.status() !== 'NoError') {
+        // Clean up manifold before throwing
+        if (manifold) manifold.delete();
         throw new Error(`Input mesh is not a valid manifold: ${manifold.status()}`);
       }
 
@@ -305,7 +311,7 @@ export class ManifoldSplitter {
       console.log('Piece sizes:', pieceSizes);
 
       // Create alignment holes BEFORE cutting if enabled
-      let manifoldWithHoles = manifold;
+      manifoldWithHoles = manifold; // Start with reference to original
 
       if (options.alignmentHoles?.enabled) {
         console.log('Creating alignment holes before cutting...');
@@ -423,8 +429,13 @@ export class ManifoldSplitter {
                       .rotate([0, 90, 0])
                       .translate([cutPosition, gridY, gridZ]);
 
-                    const halfDepthRemoved = beforeVol - manifoldWithHoles.subtract(halfDepthCylinder).volume();
+                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
+                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
                     depthRatio = halfDepthRemoved / volumeRemoved;
+
+                    // Clean up intermediate objects
+                    halfDepthCylinder.delete();
+                    halfDepthManifold.delete();
 
                     // Reject if material is spread across both halves (indicates two-wall penetration)
                     if (depthRatio < 0.6) {
@@ -433,11 +444,24 @@ export class ManifoldSplitter {
                   }
 
                   if (shouldKeep) {
+                    // Delete old manifoldWithHoles if it's not the original
+                    if (manifoldWithHoles !== manifold) {
+                      manifoldWithHoles.delete();
+                    }
                     manifoldWithHoles = testManifold;
                     holesCreated++;
                     console.log(`    ✓ X-hole (${i},${y},${z}) ${pos.label} at (${cutPosition.toFixed(1)}, ${gridY.toFixed(1)}, ${gridZ.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
+                  } else {
+                    // Not keeping - clean up test manifold
+                    testManifold.delete();
                   }
+                } else {
+                  // Didn't meet volume threshold - clean up test manifold
+                  testManifold.delete();
                 }
+
+                // Always clean up cylinder
+                cylinder.delete();
               }
 
               if (holesCreated > 0) {
@@ -540,8 +564,13 @@ export class ManifoldSplitter {
                       .rotate([90, 0, 0])
                       .translate([gridX, cutPosition, gridZ]);
 
-                    const halfDepthRemoved = beforeVol - manifoldWithHoles.subtract(halfDepthCylinder).volume();
+                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
+                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
                     depthRatio = halfDepthRemoved / volumeRemoved;
+
+                    // Clean up intermediate objects
+                    halfDepthCylinder.delete();
+                    halfDepthManifold.delete();
 
                     // Reject if material is spread across both halves (indicates two-wall penetration)
                     if (depthRatio < 0.6) {
@@ -550,11 +579,24 @@ export class ManifoldSplitter {
                   }
 
                   if (shouldKeep) {
+                    // Delete old manifoldWithHoles if it's not the original
+                    if (manifoldWithHoles !== manifold) {
+                      manifoldWithHoles.delete();
+                    }
                     manifoldWithHoles = testManifold;
                     holesCreated++;
                     console.log(`    ✓ Y-hole (${x},${i},${z}) ${pos.label} at (${gridX.toFixed(1)}, ${cutPosition.toFixed(1)}, ${gridZ.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
+                  } else {
+                    // Not keeping - clean up test manifold
+                    testManifold.delete();
                   }
+                } else {
+                  // Didn't meet volume threshold - clean up test manifold
+                  testManifold.delete();
                 }
+
+                // Always clean up cylinder
+                cylinder.delete();
               }
 
               if (holesCreated > 0) {
@@ -655,8 +697,13 @@ export class ManifoldSplitter {
                       .translate([0, 0, -totalDepth/4])
                       .translate([gridX, gridY, cutPosition]);
 
-                    const halfDepthRemoved = beforeVol - manifoldWithHoles.subtract(halfDepthCylinder).volume();
+                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
+                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
                     depthRatio = halfDepthRemoved / volumeRemoved;
+
+                    // Clean up intermediate objects
+                    halfDepthCylinder.delete();
+                    halfDepthManifold.delete();
 
                     // Reject if material is spread across both halves (indicates two-wall penetration)
                     if (depthRatio < 0.6) {
@@ -665,11 +712,24 @@ export class ManifoldSplitter {
                   }
 
                   if (shouldKeep) {
+                    // Delete old manifoldWithHoles if it's not the original
+                    if (manifoldWithHoles !== manifold) {
+                      manifoldWithHoles.delete();
+                    }
                     manifoldWithHoles = testManifold;
                     holesCreated++;
                     console.log(`    ✓ Z-hole (${x},${y},${i}) ${pos.label} at (${gridX.toFixed(1)}, ${gridY.toFixed(1)}, ${cutPosition.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
+                  } else {
+                    // Not keeping - clean up test manifold
+                    testManifold.delete();
                   }
+                } else {
+                  // Didn't meet volume threshold - clean up test manifold
+                  testManifold.delete();
                 }
+
+                // Always clean up cylinder
+                cylinder.delete();
               }
 
               if (holesCreated > 0) {
@@ -716,6 +776,9 @@ export class ManifoldSplitter {
             // Intersect with original (with holes already subtracted if enabled)
             console.log(`Intersecting part ${x + 1}_${y + 1}_${z + 1}...`);
             const partManifold = manifoldWithHoles.intersect(cuttingBox);
+
+            // Clean up cutting box immediately
+            cuttingBox.delete();
 
             if (partManifold.status() === 'NoError' && partManifold.volume() > 0.001) {
               // Convert back to mesh
@@ -765,8 +828,13 @@ export class ManifoldSplitter {
 
                 console.log(`✓ Created part: ${partName} (${partMesh.vertProperties.length / 3} vertices)`);
               }
+
+              // Clean up part manifold (Mesh objects don't need .delete())
+              partManifold.delete();
             } else {
               console.log(`⚠ Skipping empty part ${x + 1}_${y + 1}_${z + 1}`);
+              // Clean up empty part manifold
+              partManifold.delete();
             }
           }
         }
@@ -799,6 +867,18 @@ export class ManifoldSplitter {
         success: false,
         error: `Manifold processing failed: ${error instanceof Error ? error.message : error}`
       };
+    } finally {
+      // Clean up main WASM objects (only Manifold objects need .delete())
+      try {
+        if (manifoldWithHoles && manifoldWithHoles !== manifold) {
+          manifoldWithHoles.delete();
+        }
+        if (manifold) {
+          manifold.delete();
+        }
+      } catch (cleanupError) {
+        console.error('Error during WASM cleanup:', cleanupError);
+      }
     }
   }
 }

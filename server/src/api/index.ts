@@ -8,6 +8,7 @@ import { processRouter } from './routes/process';
 import { jobsRouter } from './routes/jobs';
 import { downloadRouter } from './routes/download';
 import { healthRouter } from './routes/health';
+import { adminRouter } from './routes/admin';
 import * as dotenv from 'dotenv';
 
 // Load environment variables
@@ -30,15 +31,27 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
-});
-app.use('/api/', limiter);
+// Rate limiting - skip admin routes (they have auth protection)
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false'; // Default: enabled
+const rateLimitWindowMinutes = parseInt(process.env.RATE_LIMIT_WINDOW_MINUTES || '15');
+const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '200');
 
-// API Routes
+if (rateLimitEnabled) {
+  const limiter = rateLimit({
+    windowMs: rateLimitWindowMinutes * 60 * 1000,
+    max: rateLimitMax,
+    message: 'Too many requests from this IP, please try again later.',
+    skip: (req) => req.path.startsWith('/api/admin'), // Skip rate limiting for admin routes
+  });
+
+  console.log(`⚡ Rate limiting: ${rateLimitMax} requests per ${rateLimitWindowMinutes} minutes`);
+  app.use('/api/', limiter);
+} else {
+  console.log('⚠️  Rate limiting: DISABLED');
+}
+
+// API Routes (admin first to skip rate limiting)
+app.use('/api/admin', adminRouter);
 app.use('/api/health', healthRouter);
 app.use('/api/upload', uploadRouter);
 app.use('/api/process', processRouter);

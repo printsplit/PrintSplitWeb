@@ -15,6 +15,7 @@ export interface ProcessingJobData {
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
   };
+  _cancelled?: boolean; // Internal flag for job cancellation
 }
 
 export interface ProcessingJobResult {

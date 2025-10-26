@@ -47,6 +47,8 @@ services:
     container_name: printsplit-api
     ports:
       - "3000:3000"
+    volumes:
+      - ./temp/uploads:/tmp/uploads
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
@@ -60,13 +62,15 @@ services:
       RESULTS_BUCKET: results
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-100MB}
       JOB_RETENTION_HOURS: ${JOB_RETENTION_HOURS:-48}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_WINDOW_MINUTES: ${RATE_LIMIT_WINDOW_MINUTES:-15}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-200}
     depends_on:
       redis:
         condition: service_healthy
       minio:
         condition: service_healthy
-    volumes:
-      - ./temp/uploads:/tmp/uploads
     restart: unless-stopped
     networks:
       - printsplit-network
@@ -77,7 +81,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
     container_name: printsplit-worker
-    command: npm run worker
+    command: node --max-old-space-size=4096 --wasm_max_mem_pages=65536 dist/worker/index.js
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       REDIS_URL: redis://redis:6379
@@ -101,17 +105,23 @@ services:
       - printsplit-network
     # Scale workers as needed: docker-compose up --scale worker=4
 
-  # Nginx - Reverse proxy and static file server
-  nginx:
-    image: nginx:alpine
-    container_name: printsplit-nginx
+  # Caddy - Reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:2-alpine
+    container_name: printsplit-caddy
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"  # HTTP/3 support
     volumes:
-      - ./client/dist:/usr/share/nginx/html:ro
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro  # Optional: for HTTPS
+      - ./website:/usr/share/caddy/website:ro
+      - ./client/dist:/usr/share/caddy/app:ro
+      # For local testing, use Caddyfile.dev instead:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro  # Development (localhost, no SSL)
+      # - ./Caddyfile:/etc/caddy/Caddyfile:ro      # Production (printsplit.com, auto SSL)
+      - ./data/caddy/data:/data  # Certificate storage
+      - ./data/caddy/config:/config  # Caddy configuration storage
+      - ./data/caddy/logs:/var/log/caddy  # Access logs
     depends_on:
       - api
     restart: unless-stopped

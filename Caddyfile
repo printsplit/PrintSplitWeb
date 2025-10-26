@@ -1,0 +1,94 @@
+# Caddy configuration for PrintSplit
+# Automatic HTTPS with Let's Encrypt
+
+printsplit.com, www.printsplit.com {
+    # Automatic HTTPS enabled by default for the domain
+
+    # File size limits for uploads
+    request_body {
+        max_size 100MB
+    }
+
+    # API reverse proxy
+    handle /api/* {
+        reverse_proxy api:3000 {
+            # WebSocket support
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # MinIO storage proxy
+    handle /storage/* {
+        uri strip_prefix /storage
+        reverse_proxy minio:9000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # React app at /core
+    handle /core* {
+        root * /usr/share/caddy/app
+        uri strip_prefix /core
+        try_files {path} /index.html
+        file_server
+
+        # Cache static assets
+        @static {
+            path *.js *.css *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2 *.ttf *.eot
+        }
+        header @static Cache-Control "public, max-age=31536000, immutable"
+    }
+
+    # Landing page (website) - root
+    handle {
+        root * /usr/share/caddy/website
+        try_files {path} /index.html
+        file_server
+
+        # Cache static assets
+        @static {
+            path *.js *.css *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2 *.ttf *.eot
+        }
+        header @static Cache-Control "public, max-age=31536000, immutable"
+    }
+
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS Protection
+        X-XSS-Protection "1; mode=block"
+        # Remove server header
+        -Server
+    }
+
+    # Access logs
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+# HTTP redirect (Caddy handles this automatically for both domains)
+
+# Optional: Redirect www to non-www (uncomment if desired for SEO)
+# www.printsplit.com {
+#     redir https://printsplit.com{uri} permanent
+# }
+
+# Or redirect non-www to www (alternative - choose one or neither)
+# printsplit.com {
+#     redir https://www.printsplit.com{uri} permanent
+# }

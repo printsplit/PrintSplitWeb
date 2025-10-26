@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { QueueStatus } from './QueueStatus';
 
 interface ProcessingState {
   isProcessing: boolean;
@@ -37,6 +38,35 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
   lastResult,
   jobId
 }) => {
+  const [jobState, setJobState] = useState<string | null>(null);
+
+  // Poll for job state while processing
+  useEffect(() => {
+    if (!jobId || !processing.isProcessing) {
+      setJobState(null);
+      return;
+    }
+
+    const fetchJobState = async () => {
+      try {
+        const response = await fetch(`/api/jobs/${jobId}`);
+        if (response.ok) {
+          const data = await response.json();
+          setJobState(data.state);
+        }
+      } catch (error) {
+        console.error('Failed to fetch job state:', error);
+      }
+    };
+
+    // Fetch immediately
+    fetchJobState();
+
+    // Then poll every 2 seconds
+    const interval = setInterval(fetchJobState, 2000);
+    return () => clearInterval(interval);
+  }, [jobId, processing.isProcessing]);
+
   const handleDownloadAll = () => {
     if (jobId) {
       const url = `${import.meta.env.VITE_API_URL || '/api'}/download/${jobId}/all`;
@@ -51,17 +81,58 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
+  const handleCancelJob = async () => {
+    if (!jobId) return;
+
+    if (!confirm('Are you sure you want to cancel this job?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        window.location.reload(); // Reload to reset state
+      }
+    } catch (error) {
+      console.error('Failed to cancel job:', error);
+    }
+  };
+
   return (
     <div className="panel-section">
       <h3>Processing</h3>
 
-      <button
-        className="process-button"
-        onClick={onProcess}
-        disabled={!canProcess}
-      >
-        {processing.isProcessing ? 'Processing...' : 'Split STL File'}
-      </button>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button
+          className="process-button"
+          onClick={onProcess}
+          disabled={!canProcess}
+          style={{ flex: 1 }}
+        >
+          {processing.isProcessing ? 'Processing...' : 'Split STL File'}
+        </button>
+
+        {processing.isProcessing && jobId && (
+          <button
+            onClick={handleCancelJob}
+            style={{
+              padding: '12px 16px',
+              background: '#dc3545',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+            }}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
 
       {processing.isProcessing && (
         <div style={{ marginTop: '12px' }}>
@@ -77,6 +148,11 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
       <div className="status-text">
         {processing.status}
       </div>
+
+      {/* Show queue position if job is waiting */}
+      {processing.isProcessing && jobId && (
+        <QueueStatus jobId={jobId} jobState={jobState} />
+      )}
 
       {lastResult && lastResult.success && (
         <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#2d4a2d', borderRadius: '6px', border: '1px solid #6b9bd6' }}>
