@@ -6,12 +6,31 @@ A production-ready web application for splitting large 3D STL files into smaller
 
 ### Core Functionality
 - **STL File Splitting**: Split large models into smaller sections based on configurable dimensions
-=- **Balanced Cutting**: Distributes pieces evenly to avoid tiny leftover sections
+- **Balanced Cutting**: Distributes pieces evenly to avoid tiny leftover sections
 - **Alignment Holes**: Optional filament-based pin holes for easy part assembly
 - **Real-time Progress**: Live progress updates and queue position tracking
 - **Batch Download**: Download all parts as a single ZIP archive
 
-=
+## Quick Start
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/printsplit/PrintSplitWeb
+   cd PrintSplitWeb
+   ```
+
+2. **Create and edit environment file:**
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Run the build_start.sh script. (This will run npm commands, build all files, stop the PrintSplit docker containers, rebuild them, then start them up again.)
+   ```bash
+   ./build_start.sh
+   ```
+
+4. Goto http://localhost/ to see PrintSplit running on your machine.
+
 
 ## Architecture
 
@@ -55,7 +74,7 @@ A production-ready web application for splitting large 3D STL files into smaller
 - Caddy (reverse proxy with auto-HTTPS)
 - Redis (job queue and caching)
 
-## Quick Start
+## Setup
 
 ### Prerequisites
 - Docker and Docker Compose installed
@@ -173,15 +192,6 @@ Access at `/core/admin/login` with your `ADMIN_PASSWORD`.
 
 
 ## Development
-
-### Quick Setup Scripts
-
-The build_start.sh script will run npm commands, build all files, stop the PrintSplit docker containers, rebuild them, then start them up again.
-
-```bash
-./build_start.sh
-```
-
 
 ### Local Development Setup
 
