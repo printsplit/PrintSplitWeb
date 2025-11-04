@@ -226,6 +226,45 @@ export class ManifoldSplitter {
   }
 
   /**
+   * Check if a hole position would break through the model boundaries
+   * Returns true if the hole is safe to place, false if it would break through
+   */
+  private isHoleSafe(
+    position: { y?: number; z?: number; x?: number },
+    holeRadius: number,
+    actualBounds: { min1: number; max1: number; min2: number; max2: number },
+    axis: 'x' | 'y' | 'z'
+  ): boolean {
+    // Get the two perpendicular coordinates based on the cut axis
+    let pos1: number, pos2: number;
+    if (axis === 'x') {
+      pos1 = position.y!;
+      pos2 = position.z!;
+    } else if (axis === 'y') {
+      pos1 = position.x!;
+      pos2 = position.z!;
+    } else { // z
+      pos1 = position.x!;
+      pos2 = position.y!;
+    }
+
+    // Check if hole circle fits within bounds (with small safety margin)
+    const safetyMargin = 0.1; // 0.1mm safety margin
+    const minSafeDistance = holeRadius + safetyMargin;
+
+    const distToMin1 = pos1 - actualBounds.min1;
+    const distToMax1 = actualBounds.max1 - pos1;
+    const distToMin2 = pos2 - actualBounds.min2;
+    const distToMax2 = actualBounds.max2 - pos2;
+
+    // All distances must be at least holeRadius + safety margin
+    return distToMin1 >= minSafeDistance &&
+           distToMax1 >= minSafeDistance &&
+           distToMin2 >= minSafeDistance &&
+           distToMax2 >= minSafeDistance;
+  }
+
+  /**
    * Find the actual geometry bounds at a cut plane by sampling with small test boxes
    */
   private findGeometryBoundsAtCutPlane(
@@ -504,6 +543,13 @@ export class ManifoldSplitter {
                 const gridY = pos.y;
                 const gridZ = pos.z;
 
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualYMin, max1: actualYMax, min2: actualZMin, max2: actualZMax };
+                if (!this.isHoleSafe({ y: gridY, z: gridZ }, holeRadius, actualBounds, 'x')) {
+                  console.log(`    ✗ X-hole (${i},${y},${z}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
+
                 // Create test cylinder
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
                   .translate([0, 0, -totalDepth/2])
@@ -666,6 +712,13 @@ export class ManifoldSplitter {
                 const gridX = pos.x;
                 const gridZ = pos.z;
 
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualZMin, max2: actualZMax };
+                if (!this.isHoleSafe({ x: gridX, z: gridZ }, holeRadius, actualBounds, 'y')) {
+                  console.log(`    ✗ Y-hole (${x},${i},${z}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
+
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
                   .translate([0, 0, -totalDepth/2])
                   .rotate([90, 0, 0])
@@ -824,6 +877,13 @@ export class ManifoldSplitter {
 
                 const gridX = pos.x;
                 const gridY = pos.y;
+
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualYMin, max2: actualYMax };
+                if (!this.isHoleSafe({ x: gridX, y: gridY }, holeRadius, actualBounds, 'z')) {
+                  console.log(`    ✗ Z-hole (${x},${y},${i}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
 
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
                   .translate([0, 0, -totalDepth/2])
