@@ -226,6 +226,121 @@ export class ManifoldSplitter {
   }
 
   /**
+   * Check if a hole position would break through the model boundaries
+   * Returns true if the hole is safe to place, false if it would break through
+   */
+  private isHoleSafe(
+    position: { y?: number; z?: number; x?: number },
+    holeRadius: number,
+    actualBounds: { min1: number; max1: number; min2: number; max2: number },
+    axis: 'x' | 'y' | 'z'
+  ): boolean {
+    // Get the two perpendicular coordinates based on the cut axis
+    let pos1: number, pos2: number;
+    if (axis === 'x') {
+      pos1 = position.y!;
+      pos2 = position.z!;
+    } else if (axis === 'y') {
+      pos1 = position.x!;
+      pos2 = position.z!;
+    } else { // z
+      pos1 = position.x!;
+      pos2 = position.y!;
+    }
+
+    // Check if hole circle fits within bounds (with small safety margin)
+    const safetyMargin = 0.1; // 0.1mm safety margin
+    const minSafeDistance = holeRadius + safetyMargin;
+
+    const distToMin1 = pos1 - actualBounds.min1;
+    const distToMax1 = actualBounds.max1 - pos1;
+    const distToMin2 = pos2 - actualBounds.min2;
+    const distToMax2 = actualBounds.max2 - pos2;
+
+    // All distances must be at least holeRadius + safety margin
+    return distToMin1 >= minSafeDistance &&
+           distToMax1 >= minSafeDistance &&
+           distToMin2 >= minSafeDistance &&
+           distToMax2 >= minSafeDistance;
+  }
+
+  /**
+   * Find the actual geometry bounds at a cut plane by sampling with small test boxes
+   */
+  private findGeometryBoundsAtCutPlane(
+    manifold: any,
+    Manifold: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+    perpAxis1Range: [number, number],
+    perpAxis2Range: [number, number]
+  ): { min1: number; max1: number; min2: number; max2: number } | null {
+    const sampleSize = 0.5; // mm - size of test boxes for sampling
+    const sliceThickness = 0.1; // mm - thickness of the slice to test
+
+    const [rangeMin1, rangeMax1] = perpAxis1Range;
+    const [rangeMin2, rangeMax2] = perpAxis2Range;
+
+    // Sample grid resolution
+    const samples1 = Math.ceil((rangeMax1 - rangeMin1) / sampleSize);
+    const samples2 = Math.ceil((rangeMax2 - rangeMin2) / sampleSize);
+
+    let foundMin1 = rangeMax1;
+    let foundMax1 = rangeMin1;
+    let foundMin2 = rangeMax2;
+    let foundMax2 = rangeMin2;
+    let foundAny = false;
+
+    // Sample the cut plane with small test boxes
+    for (let i = 0; i < samples1; i++) {
+      for (let j = 0; j < samples2; j++) {
+        const pos1 = rangeMin1 + i * sampleSize;
+        const pos2 = rangeMin2 + j * sampleSize;
+
+        // Create a small test box at this position
+        let testBox;
+        if (axis === 'x') {
+          testBox = Manifold.cube([sliceThickness, sampleSize, sampleSize])
+            .translate([cutPosition - sliceThickness/2, pos1, pos2]);
+        } else if (axis === 'y') {
+          testBox = Manifold.cube([sampleSize, sliceThickness, sampleSize])
+            .translate([pos1, cutPosition - sliceThickness/2, pos2]);
+        } else { // z
+          testBox = Manifold.cube([sampleSize, sampleSize, sliceThickness])
+            .translate([pos1, pos2, cutPosition - sliceThickness/2]);
+        }
+
+        // Test if this box intersects the model
+        const intersection = manifold.intersect(testBox);
+        const hasGeometry = intersection.volume() > 0;
+
+        // Clean up
+        testBox.delete();
+        intersection.delete();
+
+        if (hasGeometry) {
+          foundAny = true;
+          foundMin1 = Math.min(foundMin1, pos1);
+          foundMax1 = Math.max(foundMax1, pos1 + sampleSize);
+          foundMin2 = Math.min(foundMin2, pos2);
+          foundMax2 = Math.max(foundMax2, pos2 + sampleSize);
+        }
+      }
+    }
+
+    if (!foundAny) {
+      return null;
+    }
+
+    return {
+      min1: foundMin1,
+      max1: foundMax1,
+      min2: foundMin2,
+      max2: foundMax2
+    };
+  }
+
+  /**
    * Split STL using manifold-3d
    */
   async splitSTL(options: ProcessingOptions): Promise<ProcessingResult> {
@@ -345,53 +460,77 @@ export class ManifoldSplitter {
               let holesCreated = 0;
               let holesAttempted = 0;
 
-              // Section bounds for this cut
+              // Section bounds for this cut (grid cell boundaries)
               const yMin = bounds.min[1] + y * pieceSizes.y;
               const yMax = bounds.min[1] + (y + 1) * pieceSizes.y;
               const zMin = bounds.min[2] + z * pieceSizes.z;
               const zMax = bounds.min[2] + (z + 1) * pieceSizes.z;
 
-              const sectionWidth = yMax - yMin;
-              const sectionHeight = zMax - zMin;
+              // Find actual geometry bounds at this cut plane within this section
+              console.log(`  Finding geometry bounds for X-cut ${i} section (${y}, ${z})...`);
+              const geometryBounds = this.findGeometryBoundsAtCutPlane(
+                manifoldWithHoles,
+                Manifold,
+                cutPosition,
+                'x',
+                [yMin, yMax],
+                [zMin, zMax]
+              );
+
+              if (!geometryBounds) {
+                console.log(`  X-axis section (${i}, ${y}, ${z}): No geometry found at cut plane`);
+                continue;
+              }
+
+              // Use actual geometry bounds for hole placement
+              const actualYMin = geometryBounds.min1;
+              const actualYMax = geometryBounds.max1;
+              const actualZMin = geometryBounds.min2;
+              const actualZMax = geometryBounds.max2;
+
+              const sectionWidth = actualYMax - actualYMin;
+              const sectionHeight = actualZMax - actualZMin;
+
+              console.log(`  Actual geometry at cut: Y[${actualYMin.toFixed(1)}, ${actualYMax.toFixed(1)}] Z[${actualZMin.toFixed(1)}, ${actualZMax.toFixed(1)}]`);
 
               // Generate strategic hole positions based on spacing setting
               const strategicPositions: Array<{y: number, z: number, label: string}> = [];
 
               // Check if section is large enough for holes
               if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerY = (yMin + yMax) / 2;
-                const centerZ = (zMin + zMax) / 2;
+                const centerY = (actualYMin + actualYMax) / 2;
+                const centerZ = (actualZMin + actualZMax) / 2;
 
                 // Always add 4 corners + center (sparse mode minimum)
                 strategicPositions.push(
-                  { y: yMin + edgeInset, z: zMin + edgeInset, label: 'corner-BL' },
-                  { y: yMin + edgeInset, z: zMax - edgeInset, label: 'corner-TL' },
-                  { y: yMax - edgeInset, z: zMin + edgeInset, label: 'corner-BR' },
-                  { y: yMax - edgeInset, z: zMax - edgeInset, label: 'corner-TR' },
+                  { y: actualYMin + edgeInset, z: actualZMin + edgeInset, label: 'corner-BL' },
+                  { y: actualYMin + edgeInset, z: actualZMax - edgeInset, label: 'corner-TL' },
+                  { y: actualYMax - edgeInset, z: actualZMin + edgeInset, label: 'corner-BR' },
+                  { y: actualYMax - edgeInset, z: actualZMax - edgeInset, label: 'corner-TR' },
                   { y: centerY, z: centerZ, label: 'center' }
                 );
 
                 // Add edge midpoints for normal and dense modes (if section large enough)
                 if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
                   strategicPositions.push(
-                    { y: centerY, z: zMin + edgeInset, label: 'mid-bottom' },
-                    { y: centerY, z: zMax - edgeInset, label: 'mid-top' },
-                    { y: yMin + edgeInset, z: centerZ, label: 'mid-left' },
-                    { y: yMax - edgeInset, z: centerZ, label: 'mid-right' }
+                    { y: centerY, z: actualZMin + edgeInset, label: 'mid-bottom' },
+                    { y: centerY, z: actualZMax - edgeInset, label: 'mid-top' },
+                    { y: actualYMin + edgeInset, z: centerZ, label: 'mid-left' },
+                    { y: actualYMax - edgeInset, z: centerZ, label: 'mid-right' }
                   );
 
                   // Add 1/3 points for dense mode
                   if (spacing === 'dense') {
-                    const oneThirdY = yMin + (yMax - yMin) / 3;
-                    const twoThirdY = yMin + 2 * (yMax - yMin) / 3;
-                    const oneThirdZ = zMin + (zMax - zMin) / 3;
-                    const twoThirdZ = zMin + 2 * (zMax - zMin) / 3;
+                    const oneThirdY = actualYMin + (actualYMax - actualYMin) / 3;
+                    const twoThirdY = actualYMin + 2 * (actualYMax - actualYMin) / 3;
+                    const oneThirdZ = actualZMin + (actualZMax - actualZMin) / 3;
+                    const twoThirdZ = actualZMin + 2 * (actualZMax - actualZMin) / 3;
 
                     strategicPositions.push(
-                      { y: oneThirdY, z: zMin + edgeInset, label: '1/3-bottom-left' },
-                      { y: twoThirdY, z: zMin + edgeInset, label: '1/3-bottom-right' },
-                      { y: oneThirdY, z: zMax - edgeInset, label: '1/3-top-left' },
-                      { y: twoThirdY, z: zMax - edgeInset, label: '1/3-top-right' }
+                      { y: oneThirdY, z: actualZMin + edgeInset, label: '1/3-bottom-left' },
+                      { y: twoThirdY, z: actualZMin + edgeInset, label: '1/3-bottom-right' },
+                      { y: oneThirdY, z: actualZMax - edgeInset, label: '1/3-top-left' },
+                      { y: twoThirdY, z: actualZMax - edgeInset, label: '1/3-top-right' }
                     );
                   }
                 }
@@ -403,6 +542,13 @@ export class ManifoldSplitter {
 
                 const gridY = pos.y;
                 const gridZ = pos.z;
+
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualYMin, max1: actualYMax, min2: actualZMin, max2: actualZMax };
+                if (!this.isHoleSafe({ y: gridY, z: gridZ }, holeRadius, actualBounds, 'x')) {
+                  console.log(`    ✗ X-hole (${i},${y},${z}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
 
                 // Create test cylinder
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
@@ -483,53 +629,77 @@ export class ManifoldSplitter {
               let holesCreated = 0;
               let holesAttempted = 0;
 
-              // Section bounds for this cut
+              // Section bounds for this cut (grid cell boundaries)
               const xMin = bounds.min[0] + x * pieceSizes.x;
               const xMax = bounds.min[0] + (x + 1) * pieceSizes.x;
               const zMin = bounds.min[2] + z * pieceSizes.z;
               const zMax = bounds.min[2] + (z + 1) * pieceSizes.z;
 
-              const sectionWidth = xMax - xMin;
-              const sectionHeight = zMax - zMin;
+              // Find actual geometry bounds at this cut plane within this section
+              console.log(`  Finding geometry bounds for Y-cut ${i} section (${x}, ${z})...`);
+              const geometryBounds = this.findGeometryBoundsAtCutPlane(
+                manifoldWithHoles,
+                Manifold,
+                cutPosition,
+                'y',
+                [xMin, xMax],
+                [zMin, zMax]
+              );
+
+              if (!geometryBounds) {
+                console.log(`  Y-axis section (${x}, ${i}, ${z}): No geometry found at cut plane`);
+                continue;
+              }
+
+              // Use actual geometry bounds for hole placement
+              const actualXMin = geometryBounds.min1;
+              const actualXMax = geometryBounds.max1;
+              const actualZMin = geometryBounds.min2;
+              const actualZMax = geometryBounds.max2;
+
+              const sectionWidth = actualXMax - actualXMin;
+              const sectionHeight = actualZMax - actualZMin;
+
+              console.log(`  Actual geometry at cut: X[${actualXMin.toFixed(1)}, ${actualXMax.toFixed(1)}] Z[${actualZMin.toFixed(1)}, ${actualZMax.toFixed(1)}]`);
 
               // Generate strategic hole positions based on spacing setting
               const strategicPositions: Array<{x: number, z: number, label: string}> = [];
 
               // Check if section is large enough for holes
               if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerX = (xMin + xMax) / 2;
-                const centerZ = (zMin + zMax) / 2;
+                const centerX = (actualXMin + actualXMax) / 2;
+                const centerZ = (actualZMin + actualZMax) / 2;
 
                 // Always add 4 corners + center (sparse mode minimum)
                 strategicPositions.push(
-                  { x: xMin + edgeInset, z: zMin + edgeInset, label: 'corner-BL' },
-                  { x: xMin + edgeInset, z: zMax - edgeInset, label: 'corner-TL' },
-                  { x: xMax - edgeInset, z: zMin + edgeInset, label: 'corner-BR' },
-                  { x: xMax - edgeInset, z: zMax - edgeInset, label: 'corner-TR' },
+                  { x: actualXMin + edgeInset, z: actualZMin + edgeInset, label: 'corner-BL' },
+                  { x: actualXMin + edgeInset, z: actualZMax - edgeInset, label: 'corner-TL' },
+                  { x: actualXMax - edgeInset, z: actualZMin + edgeInset, label: 'corner-BR' },
+                  { x: actualXMax - edgeInset, z: actualZMax - edgeInset, label: 'corner-TR' },
                   { x: centerX, z: centerZ, label: 'center' }
                 );
 
                 // Add edge midpoints for normal and dense modes (if section large enough)
                 if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
                   strategicPositions.push(
-                    { x: centerX, z: zMin + edgeInset, label: 'mid-bottom' },
-                    { x: centerX, z: zMax - edgeInset, label: 'mid-top' },
-                    { x: xMin + edgeInset, z: centerZ, label: 'mid-left' },
-                    { x: xMax - edgeInset, z: centerZ, label: 'mid-right' }
+                    { x: centerX, z: actualZMin + edgeInset, label: 'mid-bottom' },
+                    { x: centerX, z: actualZMax - edgeInset, label: 'mid-top' },
+                    { x: actualXMin + edgeInset, z: centerZ, label: 'mid-left' },
+                    { x: actualXMax - edgeInset, z: centerZ, label: 'mid-right' }
                   );
 
                   // Add 1/3 points for dense mode
                   if (spacing === 'dense') {
-                    const oneThirdX = xMin + (xMax - xMin) / 3;
-                    const twoThirdX = xMin + 2 * (xMax - xMin) / 3;
-                    const oneThirdZ = zMin + (zMax - zMin) / 3;
-                    const twoThirdZ = zMin + 2 * (zMax - zMin) / 3;
+                    const oneThirdX = actualXMin + (actualXMax - actualXMin) / 3;
+                    const twoThirdX = actualXMin + 2 * (actualXMax - actualXMin) / 3;
+                    const oneThirdZ = actualZMin + (actualZMax - actualZMin) / 3;
+                    const twoThirdZ = actualZMin + 2 * (actualZMax - actualZMin) / 3;
 
                     strategicPositions.push(
-                      { x: oneThirdX, z: zMin + edgeInset, label: '1/3-bottom-left' },
-                      { x: twoThirdX, z: zMin + edgeInset, label: '1/3-bottom-right' },
-                      { x: oneThirdX, z: zMax - edgeInset, label: '1/3-top-left' },
-                      { x: twoThirdX, z: zMax - edgeInset, label: '1/3-top-right' }
+                      { x: oneThirdX, z: actualZMin + edgeInset, label: '1/3-bottom-left' },
+                      { x: twoThirdX, z: actualZMin + edgeInset, label: '1/3-bottom-right' },
+                      { x: oneThirdX, z: actualZMax - edgeInset, label: '1/3-top-left' },
+                      { x: twoThirdX, z: actualZMax - edgeInset, label: '1/3-top-right' }
                     );
                   }
                 }
@@ -541,6 +711,13 @@ export class ManifoldSplitter {
 
                 const gridX = pos.x;
                 const gridZ = pos.z;
+
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualZMin, max2: actualZMax };
+                if (!this.isHoleSafe({ x: gridX, z: gridZ }, holeRadius, actualBounds, 'y')) {
+                  console.log(`    ✗ Y-hole (${x},${i},${z}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
 
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
                   .translate([0, 0, -totalDepth/2])
@@ -618,53 +795,77 @@ export class ManifoldSplitter {
               let holesCreated = 0;
               let holesAttempted = 0;
 
-              // Section bounds for this cut
+              // Section bounds for this cut (grid cell boundaries)
               const xMin = bounds.min[0] + x * pieceSizes.x;
               const xMax = bounds.min[0] + (x + 1) * pieceSizes.x;
               const yMin = bounds.min[1] + y * pieceSizes.y;
               const yMax = bounds.min[1] + (y + 1) * pieceSizes.y;
 
-              const sectionWidth = xMax - xMin;
-              const sectionHeight = yMax - yMin;
+              // Find actual geometry bounds at this cut plane within this section
+              console.log(`  Finding geometry bounds for Z-cut ${i} section (${x}, ${y})...`);
+              const geometryBounds = this.findGeometryBoundsAtCutPlane(
+                manifoldWithHoles,
+                Manifold,
+                cutPosition,
+                'z',
+                [xMin, xMax],
+                [yMin, yMax]
+              );
+
+              if (!geometryBounds) {
+                console.log(`  Z-axis section (${x}, ${y}, ${i}): No geometry found at cut plane`);
+                continue;
+              }
+
+              // Use actual geometry bounds for hole placement
+              const actualXMin = geometryBounds.min1;
+              const actualXMax = geometryBounds.max1;
+              const actualYMin = geometryBounds.min2;
+              const actualYMax = geometryBounds.max2;
+
+              const sectionWidth = actualXMax - actualXMin;
+              const sectionHeight = actualYMax - actualYMin;
+
+              console.log(`  Actual geometry at cut: X[${actualXMin.toFixed(1)}, ${actualXMax.toFixed(1)}] Y[${actualYMin.toFixed(1)}, ${actualYMax.toFixed(1)}]`);
 
               // Generate strategic hole positions based on spacing setting
               const strategicPositions: Array<{x: number, y: number, label: string}> = [];
 
               // Check if section is large enough for holes
               if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerX = (xMin + xMax) / 2;
-                const centerY = (yMin + yMax) / 2;
+                const centerX = (actualXMin + actualXMax) / 2;
+                const centerY = (actualYMin + actualYMax) / 2;
 
                 // Always add 4 corners + center (sparse mode minimum)
                 strategicPositions.push(
-                  { x: xMin + edgeInset, y: yMin + edgeInset, label: 'corner-BL' },
-                  { x: xMin + edgeInset, y: yMax - edgeInset, label: 'corner-TL' },
-                  { x: xMax - edgeInset, y: yMin + edgeInset, label: 'corner-BR' },
-                  { x: xMax - edgeInset, y: yMax - edgeInset, label: 'corner-TR' },
+                  { x: actualXMin + edgeInset, y: actualYMin + edgeInset, label: 'corner-BL' },
+                  { x: actualXMin + edgeInset, y: actualYMax - edgeInset, label: 'corner-TL' },
+                  { x: actualXMax - edgeInset, y: actualYMin + edgeInset, label: 'corner-BR' },
+                  { x: actualXMax - edgeInset, y: actualYMax - edgeInset, label: 'corner-TR' },
                   { x: centerX, y: centerY, label: 'center' }
                 );
 
                 // Add edge midpoints for normal and dense modes (if section large enough)
                 if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
                   strategicPositions.push(
-                    { x: centerX, y: yMin + edgeInset, label: 'mid-bottom' },
-                    { x: centerX, y: yMax - edgeInset, label: 'mid-top' },
-                    { x: xMin + edgeInset, y: centerY, label: 'mid-left' },
-                    { x: xMax - edgeInset, y: centerY, label: 'mid-right' }
+                    { x: centerX, y: actualYMin + edgeInset, label: 'mid-bottom' },
+                    { x: centerX, y: actualYMax - edgeInset, label: 'mid-top' },
+                    { x: actualXMin + edgeInset, y: centerY, label: 'mid-left' },
+                    { x: actualXMax - edgeInset, y: centerY, label: 'mid-right' }
                   );
 
                   // Add 1/3 points for dense mode
                   if (spacing === 'dense') {
-                    const oneThirdX = xMin + (xMax - xMin) / 3;
-                    const twoThirdX = xMin + 2 * (xMax - xMin) / 3;
-                    const oneThirdY = yMin + (yMax - yMin) / 3;
-                    const twoThirdY = yMin + 2 * (yMax - yMin) / 3;
+                    const oneThirdX = actualXMin + (actualXMax - actualXMin) / 3;
+                    const twoThirdX = actualXMin + 2 * (actualXMax - actualXMin) / 3;
+                    const oneThirdY = actualYMin + (actualYMax - actualYMin) / 3;
+                    const twoThirdY = actualYMin + 2 * (actualYMax - actualYMin) / 3;
 
                     strategicPositions.push(
-                      { x: oneThirdX, y: yMin + edgeInset, label: '1/3-bottom-left' },
-                      { x: twoThirdX, y: yMin + edgeInset, label: '1/3-bottom-right' },
-                      { x: oneThirdX, y: yMax - edgeInset, label: '1/3-top-left' },
-                      { x: twoThirdX, y: yMax - edgeInset, label: '1/3-top-right' }
+                      { x: oneThirdX, y: actualYMin + edgeInset, label: '1/3-bottom-left' },
+                      { x: twoThirdX, y: actualYMin + edgeInset, label: '1/3-bottom-right' },
+                      { x: oneThirdX, y: actualYMax - edgeInset, label: '1/3-top-left' },
+                      { x: twoThirdX, y: actualYMax - edgeInset, label: '1/3-top-right' }
                     );
                   }
                 }
@@ -676,6 +877,13 @@ export class ManifoldSplitter {
 
                 const gridX = pos.x;
                 const gridY = pos.y;
+
+                // Check if hole would break through model boundaries
+                const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualYMin, max2: actualYMax };
+                if (!this.isHoleSafe({ x: gridX, y: gridY }, holeRadius, actualBounds, 'z')) {
+                  console.log(`    ✗ Z-hole (${x},${y},${i}) ${pos.label}: Skipped (would break through model boundary)`);
+                  continue;
+                }
 
                 const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
                   .translate([0, 0, -totalDepth/2])
