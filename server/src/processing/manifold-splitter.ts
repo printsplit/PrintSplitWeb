@@ -248,8 +248,8 @@ export class ManifoldSplitter {
       pos2 = position.y!;
     }
 
-    // Check if hole circle fits within bounds (with small safety margin)
-    const safetyMargin = 0.1; // 0.1mm safety margin
+    // Check if hole circle fits within bounds (with safety margin)
+    const safetyMargin = 0.2; // 0.2mm safety margin
     const minSafeDistance = holeRadius + safetyMargin;
 
     const distToMin1 = pos1 - actualBounds.min1;
@@ -275,7 +275,7 @@ export class ManifoldSplitter {
     perpAxis1Range: [number, number],
     perpAxis2Range: [number, number]
   ): { min1: number; max1: number; min2: number; max2: number } | null {
-    const sampleSize = 0.5; // mm - size of test boxes for sampling
+    const sampleSize = 2.0; // mm - size of test boxes for sampling (optimized: 16x fewer samples than 0.5mm)
     const sliceThickness = 0.1; // mm - thickness of the slice to test
 
     const [rangeMin1, rangeMax1] = perpAxis1Range;
@@ -550,8 +550,8 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                // Create test cylinder
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
+                // Create test cylinder (16 segments - optimized for performance)
+                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
                   .translate([0, 0, -totalDepth/2])
                   .rotate([0, 90, 0])
                   .translate([cutPosition, gridY, gridZ]);
@@ -570,7 +570,7 @@ export class ManifoldSplitter {
 
                   if (removalRatio < 0.9) {
                     // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 32)
+                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
                       .translate([0, 0, -totalDepth/4])
                       .rotate([0, 90, 0])
                       .translate([cutPosition, gridY, gridZ]);
@@ -719,7 +719,7 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
+                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
                   .translate([0, 0, -totalDepth/2])
                   .rotate([90, 0, 0])
                   .translate([gridX, cutPosition, gridZ]);
@@ -736,7 +736,7 @@ export class ManifoldSplitter {
 
                   if (removalRatio < 0.9) {
                     // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 32)
+                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
                       .translate([0, 0, -totalDepth/4])
                       .rotate([90, 0, 0])
                       .translate([gridX, cutPosition, gridZ]);
@@ -885,7 +885,7 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 32)
+                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
                   .translate([0, 0, -totalDepth/2])
                   .translate([gridX, gridY, cutPosition]);
 
@@ -901,7 +901,7 @@ export class ManifoldSplitter {
 
                   if (removalRatio < 0.9) {
                     // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 32)
+                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
                       .translate([0, 0, -totalDepth/4])
                       .translate([gridX, gridY, cutPosition]);
 
