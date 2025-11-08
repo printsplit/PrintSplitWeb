@@ -224,6 +224,12 @@ export function HomePage() {
             lastResult={lastResult}
             jobId={currentJobId || undefined}
           />
+
+          <div style={{ marginTop: 'auto', paddingTop: '20px', borderTop: '1px solid #2d3748', textAlign: 'center' }}>
+            <p style={{ fontSize: '0.875rem', color: '#a0aec0', margin: '0' }}>
+              Questions or feedback? <a href="mailto:shea@sheasilverman.com" style={{ color: '#6b9bd6', textDecoration: 'none' }}>Email us</a>
+            </p>
+          </div>
         </div>
 
         <div className="right-panel">
