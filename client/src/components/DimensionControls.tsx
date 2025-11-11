@@ -16,6 +16,7 @@ interface AlignmentHoles {
 interface DimensionControlsProps {
   dimensions: Dimensions;
   onChange: (dimensions: Dimensions) => void;
+  onBlur?: () => void;
   smartBoundaries: boolean;
   onSmartBoundariesChange: (enabled: boolean) => void;
   balancedCutting: boolean;
@@ -27,6 +28,7 @@ interface DimensionControlsProps {
 const DimensionControls: React.FC<DimensionControlsProps> = ({
   dimensions,
   onChange,
+  onBlur,
   smartBoundaries,
   onSmartBoundariesChange,
   balancedCutting,
@@ -53,30 +55,33 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
             type="number"
             value={dimensions.x}
             onChange={(e) => handleDimensionChange('x', e.target.value)}
+            onBlur={onBlur}
             min="10"
             max="1000"
           />
           <span>mm</span>
         </div>
-        
+
         <div className="dimension-input">
           <label>Y:</label>
           <input
             type="number"
             value={dimensions.y}
             onChange={(e) => handleDimensionChange('y', e.target.value)}
+            onBlur={onBlur}
             min="10"
             max="1000"
           />
           <span>mm</span>
         </div>
-        
+
         <div className="dimension-input">
           <label>Z:</label>
           <input
             type="number"
             value={dimensions.z}
             onChange={(e) => handleDimensionChange('z', e.target.value)}
+            onBlur={onBlur}
             min="10"
             max="1000"
           />

@@ -77,6 +77,7 @@ export function HomePage() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dimensions, setDimensions] = useState<Dimensions>(settings.dimensions);
+  const [debouncedDimensions, setDebouncedDimensions] = useState<Dimensions>(settings.dimensions);
   const [smartBoundaries, setSmartBoundaries] = useState<boolean>(settings.smartBoundaries);
   const [balancedCutting, setBalancedCutting] = useState<boolean>(settings.balancedCutting);
   const [alignmentHoles, setAlignmentHoles] = useState<AlignmentHoles>(settings.alignmentHoles);
@@ -103,6 +104,15 @@ export function HomePage() {
     }
   };
 
+  // Debounce dimensions updates for preview (2 second delay)
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedDimensions(dimensions);
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [dimensions]);
+
   // Save settings whenever relevant state changes
   useEffect(() => {
     saveSettings();
@@ -114,6 +124,11 @@ export function HomePage() {
 
   const handleDimensionChange = (newDimensions: Dimensions) => {
     setDimensions(newDimensions);
+  };
+
+  const handleDimensionBlur = () => {
+    // Immediately update preview when user leaves input field
+    setDebouncedDimensions(dimensions);
   };
 
   const handleSmartBoundariesChange = (enabled: boolean) => {
@@ -209,6 +224,7 @@ export function HomePage() {
           <DimensionControls
             dimensions={dimensions}
             onChange={handleDimensionChange}
+            onBlur={handleDimensionBlur}
             smartBoundaries={smartBoundaries}
             onSmartBoundariesChange={handleSmartBoundariesChange}
             balancedCutting={balancedCutting}
@@ -235,7 +251,7 @@ export function HomePage() {
         <div className="right-panel">
           <STLPreview
             file={selectedFile}
-            dimensions={dimensions}
+            dimensions={debouncedDimensions}
             processingResult={lastResult}
           />
         </div>
