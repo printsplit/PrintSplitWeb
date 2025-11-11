@@ -16,6 +16,80 @@ body {
     overflow-x: hidden;
 }
 
+/* ===== Announcement Banner ===== */
+.announcement-banner {
+    background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+    color: white;
+    padding: 12px 0;
+    margin-top: 56px; /* Push down below fixed navbar */
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    /* animation: slideDown 0.3s ease; */
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+}
+
+.announcement-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.announcement-icon {
+    font-size: 1.2rem;
+    opacity: 0.9;
+}
+
+.announcement-message {
+    flex: 1;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
+.announcement-close {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.announcement-close:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+/* Hero section positioning */
+.hero-section {
+    margin-top: 0;
+}
+
 /* ===== Navigation ===== */
 .navbar {
     backdrop-filter: blur(10px);

@@ -265,7 +265,116 @@ export class ManifoldSplitter {
   }
 
   /**
-   * Find the actual geometry bounds at a cut plane by sampling with small test boxes
+   * Test if geometry exists at a specific position on the cut plane
+   */
+  private hasGeometryAtPosition(
+    manifold: any,
+    Manifold: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+    pos1: number,
+    pos2: number,
+    sampleSize: number,
+    sliceThickness: number
+  ): boolean {
+    // Create a small test box at this position
+    let testBox;
+    if (axis === 'x') {
+      testBox = Manifold.cube([sliceThickness, sampleSize, sampleSize])
+        .translate([cutPosition - sliceThickness/2, pos1, pos2]);
+    } else if (axis === 'y') {
+      testBox = Manifold.cube([sampleSize, sliceThickness, sampleSize])
+        .translate([pos1, cutPosition - sliceThickness/2, pos2]);
+    } else { // z
+      testBox = Manifold.cube([sampleSize, sampleSize, sliceThickness])
+        .translate([pos1, pos2, cutPosition - sliceThickness/2]);
+    }
+
+    // Test if this box intersects the model
+    const intersection = manifold.intersect(testBox);
+    const hasGeometry = intersection.volume() > 0;
+
+    // Clean up
+    testBox.delete();
+    intersection.delete();
+
+    return hasGeometry;
+  }
+
+  /**
+   * Binary search to find the minimum bound where geometry starts
+   */
+  private binarySearchMin(
+    manifold: any,
+    Manifold: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+    searchAxis: 1 | 2, // Which axis to search along
+    rangeMin: number,
+    rangeMax: number,
+    otherAxisCenter: number,
+    sampleSize: number,
+    sliceThickness: number
+  ): number {
+    let low = rangeMin;
+    let high = rangeMax;
+    let foundMin = rangeMax;
+
+    while (high - low > sampleSize) {
+      const mid = (low + high) / 2;
+
+      const pos1 = searchAxis === 1 ? mid : otherAxisCenter;
+      const pos2 = searchAxis === 2 ? mid : otherAxisCenter;
+
+      if (this.hasGeometryAtPosition(manifold, Manifold, cutPosition, axis, pos1, pos2, sampleSize, sliceThickness)) {
+        foundMin = mid;
+        high = mid; // Search lower half
+      } else {
+        low = mid; // Search upper half
+      }
+    }
+
+    return foundMin;
+  }
+
+  /**
+   * Binary search to find the maximum bound where geometry ends
+   */
+  private binarySearchMax(
+    manifold: any,
+    Manifold: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+    searchAxis: 1 | 2,
+    rangeMin: number,
+    rangeMax: number,
+    otherAxisCenter: number,
+    sampleSize: number,
+    sliceThickness: number
+  ): number {
+    let low = rangeMin;
+    let high = rangeMax;
+    let foundMax = rangeMin;
+
+    while (high - low > sampleSize) {
+      const mid = (low + high) / 2;
+
+      const pos1 = searchAxis === 1 ? mid : otherAxisCenter;
+      const pos2 = searchAxis === 2 ? mid : otherAxisCenter;
+
+      if (this.hasGeometryAtPosition(manifold, Manifold, cutPosition, axis, pos1, pos2, sampleSize, sliceThickness)) {
+        foundMax = mid;
+        low = mid; // Search upper half
+      } else {
+        high = mid; // Search lower half
+      }
+    }
+
+    return foundMax;
+  }
+
+  /**
+   * Find the actual geometry bounds at a cut plane using binary search (O(log n) instead of O(n²))
    */
   private findGeometryBoundsAtCutPlane(
     manifold: any,
@@ -275,68 +384,61 @@ export class ManifoldSplitter {
     perpAxis1Range: [number, number],
     perpAxis2Range: [number, number]
   ): { min1: number; max1: number; min2: number; max2: number } | null {
-    const sampleSize = 2.0; // mm - size of test boxes for sampling (optimized: 16x fewer samples than 0.5mm)
+    const sampleSize = 2.0; // mm - size of test boxes for sampling
     const sliceThickness = 0.1; // mm - thickness of the slice to test
 
     const [rangeMin1, rangeMax1] = perpAxis1Range;
     const [rangeMin2, rangeMax2] = perpAxis2Range;
 
-    // Sample grid resolution
-    const samples1 = Math.ceil((rangeMax1 - rangeMin1) / sampleSize);
-    const samples2 = Math.ceil((rangeMax2 - rangeMin2) / sampleSize);
+    // First, check if there's any geometry at the center
+    let center1 = (rangeMin1 + rangeMax1) / 2;
+    let center2 = (rangeMin2 + rangeMax2) / 2;
 
-    let foundMin1 = rangeMax1;
-    let foundMax1 = rangeMin1;
-    let foundMin2 = rangeMax2;
-    let foundMax2 = rangeMin2;
-    let foundAny = false;
+    if (!this.hasGeometryAtPosition(manifold, Manifold, cutPosition, axis, center1, center2, sampleSize, sliceThickness)) {
+      // No geometry at center, do a quick coarse scan to find any geometry
+      const coarseSamples = 5;
+      const step1 = (rangeMax1 - rangeMin1) / coarseSamples;
+      const step2 = (rangeMax2 - rangeMin2) / coarseSamples;
 
-    // Sample the cut plane with small test boxes
-    for (let i = 0; i < samples1; i++) {
-      for (let j = 0; j < samples2; j++) {
-        const pos1 = rangeMin1 + i * sampleSize;
-        const pos2 = rangeMin2 + j * sampleSize;
+      let foundGeometry = false;
+      let foundPos1 = center1;
+      let foundPos2 = center2;
 
-        // Create a small test box at this position
-        let testBox;
-        if (axis === 'x') {
-          testBox = Manifold.cube([sliceThickness, sampleSize, sampleSize])
-            .translate([cutPosition - sliceThickness/2, pos1, pos2]);
-        } else if (axis === 'y') {
-          testBox = Manifold.cube([sampleSize, sliceThickness, sampleSize])
-            .translate([pos1, cutPosition - sliceThickness/2, pos2]);
-        } else { // z
-          testBox = Manifold.cube([sampleSize, sampleSize, sliceThickness])
-            .translate([pos1, pos2, cutPosition - sliceThickness/2]);
-        }
+      for (let i = 0; i <= coarseSamples && !foundGeometry; i++) {
+        for (let j = 0; j <= coarseSamples && !foundGeometry; j++) {
+          const testPos1 = rangeMin1 + i * step1;
+          const testPos2 = rangeMin2 + j * step2;
 
-        // Test if this box intersects the model
-        const intersection = manifold.intersect(testBox);
-        const hasGeometry = intersection.volume() > 0;
-
-        // Clean up
-        testBox.delete();
-        intersection.delete();
-
-        if (hasGeometry) {
-          foundAny = true;
-          foundMin1 = Math.min(foundMin1, pos1);
-          foundMax1 = Math.max(foundMax1, pos1 + sampleSize);
-          foundMin2 = Math.min(foundMin2, pos2);
-          foundMax2 = Math.max(foundMax2, pos2 + sampleSize);
+          if (this.hasGeometryAtPosition(manifold, Manifold, cutPosition, axis, testPos1, testPos2, sampleSize, sliceThickness)) {
+            foundGeometry = true;
+            foundPos1 = testPos1;
+            foundPos2 = testPos2;
+          }
         }
       }
+
+      if (!foundGeometry) {
+        return null; // No geometry found at this cut plane
+      }
+
+      // Use found position as center for binary search
+      center1 = foundPos1;
+      center2 = foundPos2;
     }
 
-    if (!foundAny) {
-      return null;
-    }
+    // Binary search for bounds in axis 1 direction, using center of axis 2
+    const min1 = this.binarySearchMin(manifold, Manifold, cutPosition, axis, 1, rangeMin1, center1, center2, sampleSize, sliceThickness);
+    const max1 = this.binarySearchMax(manifold, Manifold, cutPosition, axis, 1, center1, rangeMax1, center2, sampleSize, sliceThickness);
+
+    // Binary search for bounds in axis 2 direction, using center of axis 1
+    const min2 = this.binarySearchMin(manifold, Manifold, cutPosition, axis, 2, rangeMin2, center2, center1, sampleSize, sliceThickness);
+    const max2 = this.binarySearchMax(manifold, Manifold, cutPosition, axis, 2, center2, rangeMax2, center1, sampleSize, sliceThickness);
 
     return {
-      min1: foundMin1,
-      max1: foundMax1,
-      min2: foundMin2,
-      max2: foundMax2
+      min1: min1,
+      max1: max1 + sampleSize, // Add sample size for coverage
+      min2: min2,
+      max2: max2 + sampleSize
     };
   }
 
