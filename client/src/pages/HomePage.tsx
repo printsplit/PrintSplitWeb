@@ -173,10 +173,11 @@ export function HomePage() {
 
       // Step 3: Wait for job completion with progress updates
       setProcessing(prev => ({ ...prev, progress: 30, status: 'Processing...' }));
-      const result = await api.waitForJob(jobId, (progress, status) => {
+      const result = await api.waitForJob(jobId, (progress, status, message) => {
         // Map progress from 30-100
         const mappedProgress = 30 + (progress * 0.7);
-        setProcessing({ isProcessing: true, progress: mappedProgress, status: `Processing: ${status}` });
+        const displayMessage = message || `Processing: ${status}`;
+        setProcessing({ isProcessing: true, progress: mappedProgress, status: displayMessage });
       });
 
       // Step 4: Set the result

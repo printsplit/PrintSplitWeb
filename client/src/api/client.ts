@@ -21,6 +21,7 @@ export interface JobStatus {
   id: string;
   state: 'waiting' | 'active' | 'completed' | 'failed';
   progress: number;
+  progressMessage?: string;
   result?: {
     success: boolean;
     jobId: string;
@@ -93,7 +94,7 @@ class PrintSplitAPI {
    */
   async waitForJob(
     jobId: string,
-    onProgress?: (progress: number, status: string) => void
+    onProgress?: (progress: number, status: string, message?: string) => void
   ): Promise<JobStatus['result']> {
     return new Promise((resolve, reject) => {
       const interval = setInterval(async () => {
@@ -101,7 +102,7 @@ class PrintSplitAPI {
           const status = await this.getJobStatus(jobId);
 
           if (onProgress) {
-            onProgress(status.progress, status.state);
+            onProgress(status.progress, status.state, status.progressMessage);
           }
 
           if (status.state === 'completed') {

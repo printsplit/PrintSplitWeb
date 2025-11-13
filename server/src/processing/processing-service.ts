@@ -16,6 +16,7 @@ export interface ProcessingOptions {
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
   };
+  onProgress?: (percent: number, message: string) => void | Promise<void>;
 }
 
 export interface ProcessingResult {

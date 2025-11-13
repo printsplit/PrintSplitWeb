@@ -18,12 +18,24 @@ router.get('/:id', async (req, res) => {
     }
 
     const state = await job.getState();
-    const progress = job.progress();
+    const progressData = job.progress();
+
+    // Extract progress percent and message
+    let progressPercent = 0;
+    let progressMessage: string | undefined = undefined;
+
+    if (typeof progressData === 'object' && progressData !== null) {
+      progressPercent = progressData.percent || 0;
+      progressMessage = progressData.message;
+    } else if (typeof progressData === 'number') {
+      progressPercent = progressData;
+    }
 
     const status: JobStatus = {
       id: job.id as string,
       state: state as any,
-      progress: typeof progress === 'number' ? progress : 0,
+      progress: progressPercent,
+      progressMessage,
       createdAt: job.timestamp,
       processedAt: job.processedOn || undefined,
       completedAt: job.finishedOn || undefined,

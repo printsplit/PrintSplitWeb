@@ -58,15 +58,22 @@ router.get('/stats', authenticateAdmin, async (req, res) => {
       : 100;
 
     // Get current active job details
-    const activeJobDetails = activeJobs.map(job => ({
-      id: job.id,
-      progress: job.progress(),
-      startedAt: job.processedOn,
-      data: {
-        fileName: job.data.fileName,
-        dimensions: job.data.dimensions,
-      }
-    }));
+    const activeJobDetails = activeJobs.map(job => {
+      const progressData = job.progress();
+      const progress = typeof progressData === 'object' && progressData !== null
+        ? progressData.percent || 0
+        : (typeof progressData === 'number' ? progressData : 0);
+
+      return {
+        id: job.id,
+        progress,
+        startedAt: job.processedOn,
+        data: {
+          fileName: job.data.fileName,
+          dimensions: job.data.dimensions,
+        }
+      };
+    });
 
     res.json({
       queue: {
@@ -134,10 +141,15 @@ router.get('/jobs', authenticateAdmin, async (req, res) => {
     const formattedJobs = await Promise.all(
       jobs.map(async (job) => {
         const jobState = await job.getState();
+        const progressData = job.progress();
+        const progress = typeof progressData === 'object' && progressData !== null
+          ? progressData.percent || 0
+          : (typeof progressData === 'number' ? progressData : 0);
+
         return {
           id: job.id,
           state: jobState,
-          progress: job.progress(),
+          progress,
           data: {
             fileName: job.data.fileName,
             dimensions: job.data.dimensions,
