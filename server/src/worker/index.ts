@@ -40,6 +40,7 @@ processingQueue.process(CONCURRENCY, async (job) => {
 
   // Create a new ManifoldSplitter instance for each job to avoid WASM state corruption
   const splitter = new ManifoldSplitter();
+  splitter.setJobId(data.jobId); // Set job ID for logging
 
   // Helper function to check if job is cancelled
   const checkCancellation = async () => {
@@ -48,6 +49,12 @@ processingQueue.process(CONCURRENCY, async (job) => {
       console.log(`⚠️  Job ${data.jobId} was cancelled - exiting gracefully`);
       throw new Error('Job was cancelled');
     }
+  };
+
+  // Progress updater that sends both percent and message to Bull
+  const updateProgress = async (percent: number, message: string) => {
+    await job.progress({ percent, message });
+    console.log(`[Job ${data.jobId}] ${percent.toFixed(1)}% - ${message}`);
   };
 
   try {
@@ -60,13 +67,14 @@ processingQueue.process(CONCURRENCY, async (job) => {
 
     // Download input STL from MinIO
     console.log(`⬇️  Downloading ${data.fileId} from storage...`);
+    await updateProgress(10, `Downloading file: ${data.fileName}`);
     await storage.downloadFile(data.fileId, inputPath, 'upload');
 
     // Check for cancellation after download
     await checkCancellation();
 
     // Update progress
-    await job.progress(25);
+    await updateProgress(20, 'Download complete, preparing to process');
 
     // Process STL using ManifoldSplitter
     console.log(`⚙️  Processing STL with manifold-3d...`);
@@ -80,6 +88,7 @@ processingQueue.process(CONCURRENCY, async (job) => {
         smartBoundaries: data.smartBoundaries,
         balancedCutting: data.balancedCutting,
         alignmentHoles: data.alignmentHoles,
+        onProgress: updateProgress, // Pass progress callback
       });
     } catch (manifoldError: any) {
       // Handle Manifold-specific errors (WASM memory issues, etc.)
@@ -102,13 +111,14 @@ processingQueue.process(CONCURRENCY, async (job) => {
     // Check for cancellation after processing
     await checkCancellation();
 
-    await job.progress(75);
+    await updateProgress(75, `Processing complete: ${result.parts?.length || 0} parts created`);
 
     // Upload parts to MinIO
     console.log(`⬆️  Uploading ${result.parts.length} parts to storage...`);
     const uploadedParts = [];
 
-    for (const part of result.parts) {
+    for (let i = 0; i < result.parts.length; i++) {
+      const part = result.parts[i];
       const objectName = `${data.jobId}/${part.name}`;
       await storage.uploadFile(part.path, objectName, 'result');
 
@@ -120,9 +130,15 @@ processingQueue.process(CONCURRENCY, async (job) => {
         url,
         section: part.section,
       });
+
+      // Update progress every 5 parts
+      if (i % 5 === 0 || i === result.parts.length - 1) {
+        const uploadPercent = 75 + ((i + 1) / result.parts.length) * 15;
+        await updateProgress(uploadPercent, `Uploading parts: ${i + 1}/${result.parts.length}`);
+      }
     }
 
-    await job.progress(90);
+    await updateProgress(90, 'Creating ZIP archive');
 
     // Create ZIP archive of all parts
     console.log(`📦 Creating ZIP archive...`);
@@ -133,6 +149,8 @@ processingQueue.process(CONCURRENCY, async (job) => {
     const zipObjectName = `${data.jobId}/all-parts.zip`;
     await storage.uploadFile(zipPath, zipObjectName, 'result');
     const downloadAllUrl = `/api/download/${data.jobId}/all`;
+
+    await updateProgress(95, 'Finalizing');
 
     // Clean up local files
     await fs.rm(workDir, { recursive: true, force: true });

@@ -20,6 +20,34 @@ export interface STLMesh {
 
 export class ManifoldSplitter {
   private manifold: ManifoldToplevel | null = null;
+  private geometryBoundsCache: Map<string, { min1: number; max1: number; min2: number; max2: number } | null> = new Map();
+  private jobId?: string;
+  private onProgress?: (percent: number, message: string) => void | Promise<void>;
+
+  /**
+   * Set job ID for logging purposes
+   */
+  setJobId(jobId: string) {
+    this.jobId = jobId;
+  }
+
+  /**
+   * Job-specific logging with [Job ID] prefix
+   */
+  private log(message: string, ...args: any[]) {
+    const prefix = this.jobId ? `[Job ${this.jobId}]` : '[ManifoldSplitter]';
+    console.log(prefix, message, ...args);
+  }
+
+  /**
+   * Report progress to worker
+   */
+  private async reportProgress(percent: number, message: string) {
+    this.log(`${percent.toFixed(1)}% - ${message}`);
+    if (this.onProgress) {
+      await this.onProgress(percent, message);
+    }
+  }
 
   private async initManifold(): Promise<ManifoldToplevel> {
     if (!this.manifold) {
@@ -446,8 +474,13 @@ export class ManifoldSplitter {
    * Split STL using manifold-3d
    */
   async splitSTL(options: ProcessingOptions): Promise<ProcessingResult> {
-    console.log('Starting Manifold STL splitting...');
-    console.log('Options:', options);
+    // Store progress callback and clear cache
+    this.onProgress = options.onProgress;
+    this.geometryBoundsCache.clear();
+
+    this.log('Starting Manifold STL splitting...');
+    this.log('Options:', options);
+    await this.reportProgress(25, 'Initializing STL processor');
 
     // Track objects that need cleanup (only Manifold objects, not Mesh)
     let manifold: any = null;
@@ -459,11 +492,15 @@ export class ManifoldSplitter {
       const { Manifold } = manifoldModule;
 
       // Parse input STL
+      await this.reportProgress(27, `Parsing STL file: ${path.basename(options.inputPath)}`);
       const mesh = await this.parseSTLFile(options.inputPath);
-      console.log('Mesh bounds:', mesh.bounds);
+      this.log('Mesh bounds:', mesh.bounds);
+
+      const triangleCount = mesh.triangles.length / 3;
+      await this.reportProgress(30, `Loaded ${triangleCount.toLocaleString()} triangles`);
 
       // Create manifold from mesh
-      console.log('Creating manifold...');
+      this.log('Creating manifold...');
 
       // Create a mesh object first (Mesh objects don't need .delete(), they're JS objects)
       const meshObj = new manifoldModule.Mesh({
@@ -531,7 +568,7 @@ export class ManifoldSplitter {
       manifoldWithHoles = manifold; // Start with reference to original
 
       if (options.alignmentHoles?.enabled) {
-        console.log('Creating alignment holes before cutting...');
+        this.log('Creating alignment holes before cutting...');
         const holeRadius = (options.alignmentHoles.diameter || 1.8) / 2;
         const holeDepth = options.alignmentHoles.depth || 3;
         const totalDepth = holeDepth * 2;
@@ -547,9 +584,17 @@ export class ManifoldSplitter {
         const spacingDesc = spacing === 'sparse' ? 'corners + center' :
                            spacing === 'normal' ? 'corners + center + midpoints' :
                            'corners + center + midpoints + 1/3 points';
-        console.log(`Strategic hole placement (${spacing}): ${spacingDesc}`);
-        console.log(`Expected volume per hole: ${expectedVolume.toFixed(2)} mm³`);
-        console.log(`Quality thresholds: volume ≥${minVolumeRatio*100}%, edge inset ${edgeInset.toFixed(1)}mm, depth ratio ≥60%`);
+        this.log(`Strategic hole placement (${spacing}): ${spacingDesc}`);
+        this.log(`Expected volume per hole: ${expectedVolume.toFixed(2)} mm³`);
+        this.log(`Quality thresholds: volume ≥${minVolumeRatio*100}%, edge inset ${edgeInset.toFixed(1)}mm, depth ratio ≥60%`);
+
+        // Calculate total cuts for progress tracking
+        const totalCuts = (sections.x - 1) * sections.y * sections.z +
+                           (sections.y - 1) * sections.x * sections.z +
+                           (sections.z - 1) * sections.x * sections.y;
+        let completedCuts = 0;
+
+        await this.reportProgress(35, `Creating alignment holes (0/${totalCuts} cuts)`);
 
         // For each cut plane, create holes for each section in perpendicular axes
         // X-axis cuts (creates YZ plane cuts)
@@ -713,10 +758,15 @@ export class ManifoldSplitter {
               }
 
               if (holesCreated > 0) {
-                console.log(`  X-axis section (${i}, ${y}, ${z}): ${holesCreated}/${holesAttempted} holes created`);
+                this.log(`  X-axis section (${i}, ${y}, ${z}): ${holesCreated}/${holesAttempted} holes created`);
               } else {
-                console.log(`  X-axis section (${i}, ${y}, ${z}): No valid holes found (no geometry on cut plane)`);
+                this.log(`  X-axis section (${i}, ${y}, ${z}): No valid holes found (no geometry on cut plane)`);
               }
+
+              // Update progress after each section
+              completedCuts++;
+              const holeProgress = 35 + (completedCuts / totalCuts) * 35; // 35-70%
+              await this.reportProgress(holeProgress, `Creating alignment holes: ${completedCuts}/${totalCuts} cuts`);
             }
           }
         }
@@ -879,10 +929,15 @@ export class ManifoldSplitter {
               }
 
               if (holesCreated > 0) {
-                console.log(`  Y-axis section (${x}, ${i}, ${z}): ${holesCreated}/${holesAttempted} holes created`);
+                this.log(`  Y-axis section (${x}, ${i}, ${z}): ${holesCreated}/${holesAttempted} holes created`);
               } else {
-                console.log(`  Y-axis section (${x}, ${i}, ${z}): No valid holes found (no geometry on cut plane)`);
+                this.log(`  Y-axis section (${x}, ${i}, ${z}): No valid holes found (no geometry on cut plane)`);
               }
+
+              // Update progress after each section
+              completedCuts++;
+              const holeProgress = 35 + (completedCuts / totalCuts) * 35; // 35-70%
+              await this.reportProgress(holeProgress, `Creating alignment holes: ${completedCuts}/${totalCuts} cuts`);
             }
           }
         }
@@ -1043,10 +1098,15 @@ export class ManifoldSplitter {
               }
 
               if (holesCreated > 0) {
-                console.log(`  Z-axis section (${x}, ${y}, ${i}): ${holesCreated}/${holesAttempted} holes created`);
+                this.log(`  Z-axis section (${x}, ${y}, ${i}): ${holesCreated}/${holesAttempted} holes created`);
               } else {
-                console.log(`  Z-axis section (${x}, ${y}, ${i}): No valid holes found (no geometry on cut plane)`);
+                this.log(`  Z-axis section (${x}, ${y}, ${i}): No valid holes found (no geometry on cut plane)`);
               }
+
+              // Update progress after each section
+              completedCuts++;
+              const holeProgress = 35 + (completedCuts / totalCuts) * 35; // 35-70%
+              await this.reportProgress(holeProgress, `Creating alignment holes: ${completedCuts}/${totalCuts} cuts`);
             }
           }
         }

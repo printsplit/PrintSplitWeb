@@ -47,6 +47,7 @@ export interface JobStatus {
   id: string;
   state: JobState;
   progress: number;
+  progressMessage?: string;
   result?: ProcessingJobResult;
   error?: string;
   createdAt: number;
