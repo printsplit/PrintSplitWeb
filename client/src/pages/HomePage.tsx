@@ -69,7 +69,7 @@ export function HomePage() {
       dimensions: { x: 200, y: 200, z: 200 },
       smartBoundaries: true,
       balancedCutting: true,
-      alignmentHoles: { enabled: false, diameter: 1.8, depth: 3, spacing: 'normal' }
+      alignmentHoles: { enabled: false, diameter: 2.0, depth: 3, spacing: 'normal' }
     };
   };
 

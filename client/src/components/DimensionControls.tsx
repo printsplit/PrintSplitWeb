@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface Dimensions {
   x: number;
@@ -36,28 +36,67 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
   alignmentHoles,
   onAlignmentHolesChange
 }) => {
-  const handleDimensionChange = (axis: keyof Dimensions, value: string) => {
-    const numValue = parseFloat(value) || 10; // Default to 10 if invalid
-    const clampedValue = Math.max(10, numValue); // Enforce minimum of 10
-    onChange({
-      ...dimensions,
-      [axis]: clampedValue
+  // Track input values as strings to allow empty state
+  const [inputValues, setInputValues] = useState({
+    x: dimensions.x.toString(),
+    y: dimensions.y.toString(),
+    z: dimensions.z.toString()
+  });
+
+  // Update input values when dimensions prop changes externally
+  useEffect(() => {
+    setInputValues({
+      x: dimensions.x.toString(),
+      y: dimensions.y.toString(),
+      z: dimensions.z.toString()
     });
+  }, [dimensions.x, dimensions.y, dimensions.z]);
+
+  const isValidDimension = (value: string): boolean => {
+    const num = parseFloat(value);
+    return !isNaN(num) && num >= 10 && num <= 1000;
+  };
+
+  const handleInputChange = (axis: keyof Dimensions, value: string) => {
+    // Update input state (allows empty/invalid values)
+    setInputValues(prev => ({ ...prev, [axis]: value }));
+
+    // Only propagate valid changes to parent
+    if (isValidDimension(value)) {
+      const numValue = parseFloat(value);
+      onChange({
+        ...dimensions,
+        [axis]: numValue
+      });
+    }
+  };
+
+  const handleInputBlur = (axis: keyof Dimensions) => {
+    // On blur, if value is invalid, restore the last valid value
+    if (!isValidDimension(inputValues[axis])) {
+      setInputValues(prev => ({ ...prev, [axis]: dimensions[axis].toString() }));
+    }
+    if (onBlur) {
+      onBlur();
+    }
   };
 
   return (
     <div className="panel-section">
-      <h3>Cube Size</h3>
+      <h3>3D Printer Bed Size</h3>
       <div className="dimension-controls">
         <div className="dimension-input">
           <label>X:</label>
           <input
             type="number"
-            value={dimensions.x}
-            onChange={(e) => handleDimensionChange('x', e.target.value)}
-            onBlur={onBlur}
+            value={inputValues.x}
+            onChange={(e) => handleInputChange('x', e.target.value)}
+            onBlur={() => handleInputBlur('x')}
             min="10"
             max="1000"
+            style={{
+              outline: !isValidDimension(inputValues.x) ? '2px solid #e53e3e' : undefined
+            }}
           />
           <span>mm</span>
         </div>
@@ -66,11 +105,14 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
           <label>Y:</label>
           <input
             type="number"
-            value={dimensions.y}
-            onChange={(e) => handleDimensionChange('y', e.target.value)}
-            onBlur={onBlur}
+            value={inputValues.y}
+            onChange={(e) => handleInputChange('y', e.target.value)}
+            onBlur={() => handleInputBlur('y')}
             min="10"
             max="1000"
+            style={{
+              outline: !isValidDimension(inputValues.y) ? '2px solid #e53e3e' : undefined
+            }}
           />
           <span>mm</span>
         </div>
@@ -79,11 +121,14 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
           <label>Z:</label>
           <input
             type="number"
-            value={dimensions.z}
-            onChange={(e) => handleDimensionChange('z', e.target.value)}
-            onBlur={onBlur}
+            value={inputValues.z}
+            onChange={(e) => handleInputChange('z', e.target.value)}
+            onBlur={() => handleInputBlur('z')}
             min="10"
             max="1000"
+            style={{
+              outline: !isValidDimension(inputValues.z) ? '2px solid #e53e3e' : undefined
+            }}
           />
           <span>mm</span>
         </div>
