@@ -18,6 +18,21 @@ export interface STLMesh {
   };
 }
 
+export interface RepairResult {
+  success: boolean;
+  wasRepaired: boolean;
+  outputPath?: string;
+  report: {
+    originalStatus: string;
+    repairedStatus: string;
+    originalVertices: number;
+    repairedVertices: number;
+    originalTriangles: number;
+    repairedTriangles: number;
+  };
+  error?: string;
+}
+
 export class ManifoldSplitter {
   private manifold: ManifoldToplevel | null = null;
   private geometryBoundsCache: Map<string, { min1: number; max1: number; min2: number; max2: number } | null> = new Map();
@@ -471,6 +486,295 @@ export class ManifoldSplitter {
   }
 
   /**
+   * Fill holes in a mesh by finding boundary edge loops and creating fan triangles.
+   * Returns expanded vertex/triangle arrays (triangle soup) ready for Mesh.merge().
+   */
+  private fillMeshHoles(
+    vertices: Float32Array,
+    triangles: Uint32Array
+  ): { vertices: Float32Array; triangles: Uint32Array; holesFilled: number; fillTriangles: number } {
+    const numTris = triangles.length / 3;
+
+    // Build directed edge count map
+    const directedEdgeCount = new Map<string, number>();
+
+    for (let i = 0; i < numTris; i++) {
+      const v0 = triangles[i * 3];
+      const v1 = triangles[i * 3 + 1];
+      const v2 = triangles[i * 3 + 2];
+
+      for (const [a, b] of [[v0, v1], [v1, v2], [v2, v0]]) {
+        const key = `${a}->${b}`;
+        directedEdgeCount.set(key, (directedEdgeCount.get(key) || 0) + 1);
+      }
+    }
+
+    // Find boundary edges (a->b exists but b->a does not) using multimap
+    const boundaryNext = new Map<number, number[]>();
+
+    for (const [key] of directedEdgeCount) {
+      const parts = key.split('->');
+      const from = parseInt(parts[0]);
+      const to = parseInt(parts[1]);
+      if (!directedEdgeCount.has(`${to}->${from}`)) {
+        if (!boundaryNext.has(from)) boundaryNext.set(from, []);
+        boundaryNext.get(from)!.push(to);
+      }
+    }
+
+    let totalBoundary = 0;
+    for (const [, targets] of boundaryNext) totalBoundary += targets.length;
+
+    if (totalBoundary === 0) {
+      // No boundary edges — mesh is already closed, return as soup
+      const soupV = new Float32Array(numTris * 9);
+      const soupT = new Uint32Array(numTris * 3);
+      for (let i = 0; i < numTris; i++) {
+        for (let v = 0; v < 3; v++) {
+          const srcIdx = triangles[i * 3 + v] * 3;
+          const dstIdx = (i * 3 + v) * 3;
+          soupV[dstIdx] = vertices[srcIdx];
+          soupV[dstIdx + 1] = vertices[srcIdx + 1];
+          soupV[dstIdx + 2] = vertices[srcIdx + 2];
+          soupT[i * 3 + v] = i * 3 + v;
+        }
+      }
+      return { vertices: soupV, triangles: soupT, holesFilled: 0, fillTriangles: 0 };
+    }
+
+    this.log(`Found ${totalBoundary} boundary edges, tracing loops...`);
+
+    // Chain boundary edges into loops
+    const loops: number[][] = [];
+    const usedEdges = new Set<string>();
+
+    for (const [start] of boundaryNext) {
+      const targets = boundaryNext.get(start);
+      if (!targets) continue;
+
+      for (const firstNext of targets) {
+        const edgeKey = `${start}->${firstNext}`;
+        if (usedEdges.has(edgeKey)) continue;
+
+        const loop = [start];
+        usedEdges.add(edgeKey);
+        let current = firstNext;
+
+        while (current !== start) {
+          loop.push(current);
+          const nexts = boundaryNext.get(current);
+          if (!nexts) break;
+
+          let found = false;
+          for (const next of nexts) {
+            const ek = `${current}->${next}`;
+            if (!usedEdges.has(ek)) {
+              usedEdges.add(ek);
+              current = next;
+              found = true;
+              break;
+            }
+          }
+
+          if (!found) break;
+        }
+
+        if (current === start && loop.length >= 3) {
+          loops.push(loop);
+        }
+      }
+    }
+
+    this.log(`Found ${loops.length} boundary loops (${loops.map(l => l.length + ' verts').join(', ')})`);
+
+    // Create fan triangles to fill each hole
+    const fillTris: number[] = [];
+    for (const loop of loops) {
+      const n = loop.length;
+      for (let i = 1; i < n - 1; i++) {
+        fillTris.push(loop[0], loop[i + 1], loop[i]);
+      }
+    }
+
+    this.log(`Created ${fillTris.length / 3} fill triangles to close ${loops.length} holes`);
+
+    // Combine original + fill triangles, output as triangle soup
+    const totalTriCount = numTris + fillTris.length / 3;
+    const allTriangles = new Uint32Array(totalTriCount * 3);
+    allTriangles.set(triangles);
+    allTriangles.set(new Uint32Array(fillTris), triangles.length);
+
+    const soupV = new Float32Array(totalTriCount * 9);
+    const soupT = new Uint32Array(totalTriCount * 3);
+    for (let i = 0; i < totalTriCount; i++) {
+      for (let v = 0; v < 3; v++) {
+        const srcIdx = allTriangles[i * 3 + v] * 3;
+        const dstIdx = (i * 3 + v) * 3;
+        soupV[dstIdx] = vertices[srcIdx];
+        soupV[dstIdx + 1] = vertices[srcIdx + 1];
+        soupV[dstIdx + 2] = vertices[srcIdx + 2];
+        soupT[i * 3 + v] = i * 3 + v;
+      }
+    }
+
+    return {
+      vertices: soupV,
+      triangles: soupT,
+      holesFilled: loops.length,
+      fillTriangles: fillTris.length / 3,
+    };
+  }
+
+  /**
+   * Repair a non-manifold STL mesh by filling holes and merging vertices
+   */
+  async repairSTL(options: {
+    inputPath: string;
+    outputPath: string;
+    onProgress?: (percent: number, message: string) => Promise<void>;
+  }): Promise<RepairResult> {
+    this.onProgress = options.onProgress as any;
+    this.log('Starting STL repair...');
+
+    let manifold: any = null;
+
+    try {
+      const manifoldModule = await this.initManifold();
+      const { Manifold } = manifoldModule;
+
+      await this.reportProgress(10, 'Parsing STL file');
+      const mesh = await this.parseSTLFile(options.inputPath);
+
+      const originalVertices = mesh.vertices.length / 3;
+      const originalTriangles = mesh.triangles.length / 3;
+
+      await this.reportProgress(30, 'Checking mesh status');
+
+      // Create mesh object and try to create a Manifold
+      const meshObj = new manifoldModule.Mesh({
+        vertProperties: mesh.vertices,
+        triVerts: mesh.triangles,
+        numProp: 3,
+      });
+
+      // Try creating Manifold — if it throws, the mesh needs repair
+      let originalStatus = 'NoError';
+      try {
+        manifold = new Manifold(meshObj);
+        // If we get here, mesh is already valid
+        manifold.delete();
+        manifold = null;
+        this.log('Mesh is already manifold, no repair needed');
+        await this.reportProgress(100, 'Mesh is already valid');
+        return {
+          success: true,
+          wasRepaired: false,
+          report: {
+            originalStatus,
+            repairedStatus: originalStatus,
+            originalVertices,
+            repairedVertices: originalVertices,
+            originalTriangles,
+            repairedTriangles: originalTriangles,
+          },
+        };
+      } catch (manifoldError: any) {
+        originalStatus = manifoldError.message || String(manifoldError);
+        this.log(`Mesh is not manifold (${originalStatus}), attempting repair via merge()`);
+      }
+
+      await this.reportProgress(50, 'Filling mesh holes and rebuilding topology');
+
+      const filled = this.fillMeshHoles(mesh.vertices, mesh.triangles);
+      this.log(`Hole fill: ${filled.holesFilled} holes, ${filled.fillTriangles} fill triangles`);
+
+      const soupMesh = new manifoldModule.Mesh({
+        vertProperties: filled.vertices,
+        triVerts: filled.triangles,
+        numProp: 3,
+      });
+
+      await this.reportProgress(60, 'Merging coincident vertices');
+      soupMesh.merge();
+
+      await this.reportProgress(70, 'Validating repaired mesh');
+      try {
+        manifold = new Manifold(soupMesh);
+      } catch (retryError: any) {
+        const repairedStatus = retryError.message || String(retryError);
+        this.log(`Repair failed, still not manifold: ${repairedStatus}`);
+        return {
+          success: false,
+          wasRepaired: false,
+          report: {
+            originalStatus,
+            repairedStatus,
+            originalVertices,
+            repairedVertices: originalVertices,
+            originalTriangles,
+            repairedTriangles: originalTriangles,
+          },
+          error: `Repair could not fix the mesh: ${repairedStatus}`,
+        };
+      }
+
+      // Extract repaired mesh
+      await this.reportProgress(80, 'Exporting repaired mesh');
+      const repairedMesh = manifold.getMesh();
+      const repairedVertices = repairedMesh.vertProperties.length / 3;
+      const repairedTriangles = repairedMesh.triVerts.length / 3;
+
+      const stlMesh: STLMesh = {
+        vertices: repairedMesh.vertProperties,
+        triangles: repairedMesh.triVerts,
+        bounds: mesh.bounds,
+      };
+
+      await this.writeSTLFile(stlMesh, options.outputPath);
+      manifold.delete();
+      manifold = null;
+
+      this.log(`Repair successful: ${originalVertices} -> ${repairedVertices} vertices, ${originalTriangles} -> ${repairedTriangles} triangles`);
+      await this.reportProgress(100, 'Repair complete');
+
+      return {
+        success: true,
+        wasRepaired: true,
+        outputPath: options.outputPath,
+        report: {
+          originalStatus,
+          repairedStatus: 'NoError',
+          originalVertices,
+          repairedVertices,
+          originalTriangles,
+          repairedTriangles,
+        },
+      };
+    } catch (error) {
+      this.log(`Repair error: ${error}`);
+      return {
+        success: false,
+        wasRepaired: false,
+        report: {
+          originalStatus: 'Unknown',
+          repairedStatus: 'Unknown',
+          originalVertices: 0,
+          repairedVertices: 0,
+          originalTriangles: 0,
+          repairedTriangles: 0,
+        },
+        error: `Repair failed: ${error instanceof Error ? error.message : error}`,
+      };
+    } finally {
+      try {
+        if (manifold) manifold.delete();
+      } catch (cleanupError) {
+        console.error('Error during repair WASM cleanup:', cleanupError);
+      }
+    }
+  }
+
+  /**
    * Split STL using manifold-3d
    */
   async splitSTL(options: ProcessingOptions): Promise<ProcessingResult> {
@@ -509,12 +813,31 @@ export class ManifoldSplitter {
         numProp: 3
       });
 
-      manifold = new Manifold(meshObj);
+      try {
+        manifold = new Manifold(meshObj);
+      } catch (manifoldError: any) {
+        const errorMsg = manifoldError.message || String(manifoldError);
+        this.log(`Mesh is not manifold (${errorMsg}), attempting auto-repair via hole filling...`);
 
-      if (manifold.status() !== 'NoError') {
-        // Clean up manifold before throwing
-        if (manifold) manifold.delete();
-        throw new Error(`Input mesh is not a valid manifold: ${manifold.status()}`);
+        const filled = this.fillMeshHoles(mesh.vertices, mesh.triangles);
+        this.log(`Hole fill: ${filled.holesFilled} holes, ${filled.fillTriangles} fill triangles`);
+
+        const soupMesh = new manifoldModule.Mesh({
+          vertProperties: filled.vertices,
+          triVerts: filled.triangles,
+          numProp: 3,
+        });
+
+        soupMesh.merge();
+        this.log('Merged coincident vertices, attempting Manifold construction...');
+
+        try {
+          manifold = new Manifold(soupMesh);
+        } catch (retryError: any) {
+          throw new Error(`Input mesh is not a valid manifold: ${errorMsg}. Auto-repair failed: ${retryError.message || retryError}`);
+        }
+
+        this.log(`Auto-repair successful! Mesh is now valid (was: ${errorMsg})`);
       }
 
       console.log('Manifold created successfully. Volume:', manifold.volume());

@@ -1,5 +1,5 @@
 import Bull from 'bull';
-import { ProcessingJobData, ProcessingJobResult } from '../types/job';
+import { ProcessingJobData, ProcessingJobResult, RepairJobData, RepairJobResult } from '../types/job';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
@@ -68,4 +68,51 @@ export async function getQueueStats() {
   ]);
 
   return { waiting, active, completed, failed };
+}
+
+// Create repair queue (shorter lock settings since repair is fast)
+export const repairQueue = new Bull<RepairJobData>('stl-repair', REDIS_URL, {
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,
+    },
+    removeOnComplete: {
+      age: 48 * 3600,
+      count: 1000,
+    },
+    removeOnFail: {
+      age: 7 * 24 * 3600,
+    },
+  },
+  settings: {
+    lockDuration: 120000,    // 2 minutes (repair is fast)
+    lockRenewTime: 15000,
+    stalledInterval: 30000,
+    maxStalledCount: 2,
+  },
+});
+
+repairQueue.on('error', (error) => {
+  console.error('Repair queue error:', error);
+});
+
+repairQueue.on('failed', (job, error) => {
+  console.error(`Repair job ${job.id} failed:`, error);
+});
+
+repairQueue.on('completed', (job, result: RepairJobResult) => {
+  console.log(`Repair job ${job.id} completed. Repaired: ${result.report?.wasRepaired}`);
+});
+
+export async function addRepairJob(data: RepairJobData): Promise<string> {
+  const job = await repairQueue.add(data, {
+    jobId: data.jobId,
+  });
+  return job.id as string;
+}
+
+export async function getRepairJobStatus(jobId: string): Promise<Bull.Job<RepairJobData> | null> {
+  return await repairQueue.getJob(jobId);
 }

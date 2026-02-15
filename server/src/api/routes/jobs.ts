@@ -1,5 +1,5 @@
 import express from 'express';
-import { getJobStatus, cancelJob, getQueueStats } from '../../worker/queue';
+import { getJobStatus, getRepairJobStatus, cancelJob, getQueueStats } from '../../worker/queue';
 import { JobStatus } from '../../types/job';
 
 const router = express.Router();
@@ -11,7 +11,8 @@ const router = express.Router();
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const job = await getJobStatus(id);
+    // Check both processing and repair queues
+    const job = await getJobStatus(id) || await getRepairJobStatus(id);
 
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
@@ -65,7 +66,7 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const job = await getJobStatus(id);
+    const job = await getJobStatus(id) || await getRepairJobStatus(id);
 
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
