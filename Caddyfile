@@ -6,7 +6,7 @@ printsplit.com, www.printsplit.com {
 
     # File size limits for uploads
     request_body {
-        max_size 100MB
+        max_size 150MB
     }
 
     # API reverse proxy

@@ -30,7 +30,7 @@ function parseFileSize(sizeStr: string): number {
 const upload = multer({
   dest: '/tmp/uploads',
   limits: {
-    fileSize: parseFileSize(process.env.MAX_FILE_SIZE || '100MB'), // 100MB default
+    fileSize: parseFileSize(process.env.MAX_FILE_SIZE || '150MB'), // 150MB default
   },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
