@@ -3,7 +3,8 @@ import FileUpload from '../components/FileUpload';
 import DimensionControls from '../components/DimensionControls';
 import STLPreview from '../components/STLPreview';
 import ProcessingControls from '../components/ProcessingControls';
-import { api, RepairReport } from '../api/client';
+import { api } from '../api/client';
+import { validateSTLMesh, MeshValidation } from '../utils/meshValidator';
 import '../App.css';
 
 interface Dimensions {
@@ -88,19 +89,8 @@ export function HomePage() {
   });
   const [lastResult, setLastResult] = useState<ProcessingResult | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [repairState, setRepairState] = useState<ProcessingState>({
-    isProcessing: false,
-    progress: 0,
-    status: '',
-  });
-  const [repairResult, setRepairResult] = useState<{
-    success: boolean;
-    wasRepaired?: boolean;
-    report?: RepairReport;
-    repairedFileUrl?: string;
-    error?: string;
-  } | null>(null);
-  const [repairJobId, setRepairJobId] = useState<string | null>(null);
+  const [meshValidation, setMeshValidation] = useState<MeshValidation | null>(null);
+  const [validating, setValidating] = useState(false);
 
   // Save settings to localStorage whenever they change
   const saveSettings = () => {
@@ -131,8 +121,19 @@ export function HomePage() {
     saveSettings();
   }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles]);
 
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     setSelectedFile(file);
+    setMeshValidation(null);
+    setLastResult(null);
+    setValidating(true);
+    try {
+      const validation = await validateSTLMesh(file);
+      setMeshValidation(validation);
+    } catch (error) {
+      console.warn('Mesh validation failed:', error);
+    } finally {
+      setValidating(false);
+    }
   };
 
   const handleDimensionChange = (newDimensions: Dimensions) => {
@@ -223,67 +224,6 @@ export function HomePage() {
     }
   };
 
-  const handleRepair = async () => {
-    if (!selectedFile) {
-      alert('Please select an STL file');
-      return;
-    }
-
-    setRepairState({ isProcessing: true, progress: 0, status: 'Uploading file...' });
-    setRepairResult(null);
-
-    try {
-      setRepairState(prev => ({ ...prev, progress: 10, status: 'Uploading STL file...' }));
-      const { fileId, fileName } = await api.uploadFile(selectedFile);
-
-      setRepairState(prev => ({ ...prev, progress: 20, status: 'Starting repair...' }));
-      const { jobId } = await api.repairSTL({ fileId, fileName });
-      setRepairJobId(jobId);
-
-      setRepairState(prev => ({ ...prev, progress: 30, status: 'Repairing...' }));
-      const result = await api.waitForJob(jobId, (progress, status, message) => {
-        const mappedProgress = 30 + (progress * 0.7);
-        const displayMessage = message || `Repairing: ${status}`;
-        setRepairState({ isProcessing: true, progress: mappedProgress, status: displayMessage });
-      });
-
-      if (result) {
-        setRepairResult({
-          success: result.success,
-          wasRepaired: result.report?.wasRepaired,
-          report: result.report,
-          repairedFileUrl: result.repairedFileUrl,
-          error: result.error,
-        });
-
-        const statusMsg = result.report?.wasRepaired
-          ? 'Repair complete! Mesh was fixed.'
-          : result.success
-            ? 'Mesh is already valid, no repair needed.'
-            : `Repair failed: ${result.error || 'Unknown error'}`;
-
-        setRepairState({
-          isProcessing: false,
-          progress: 100,
-          status: statusMsg,
-        });
-      } else {
-        setRepairState({
-          isProcessing: false,
-          progress: 0,
-          status: 'Error: No result returned',
-        });
-      }
-    } catch (error) {
-      console.error('Repair error:', error);
-      setRepairState({
-        isProcessing: false,
-        progress: 0,
-        status: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      });
-    }
-  };
-
   return (
     <div className="app">
       <main className="app-main">
@@ -311,14 +251,11 @@ export function HomePage() {
           <ProcessingControls
             onProcess={handleProcess}
             processing={processing}
-            canProcess={!!selectedFile && !processing.isProcessing && !repairState.isProcessing}
+            canProcess={!!selectedFile && !processing.isProcessing && !validating}
             lastResult={lastResult}
             jobId={currentJobId || undefined}
-            onRepair={handleRepair}
-            canRepair={!!selectedFile && !processing.isProcessing && !repairState.isProcessing}
-            repairState={repairState}
-            repairResult={repairResult}
-            repairJobId={repairJobId || undefined}
+            needsRepair={meshValidation ? !meshValidation.isValid : false}
+            meshValidation={meshValidation}
           />
 
           <div style={{ marginTop: 'auto', paddingTop: '20px', borderTop: '1px solid #2d3748', textAlign: 'center' }}>

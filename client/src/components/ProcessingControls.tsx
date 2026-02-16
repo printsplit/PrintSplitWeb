@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { QueueStatus } from './QueueStatus';
+import { MeshValidation } from '../utils/meshValidator';
 
 interface ProcessingState {
   isProcessing: boolean;
@@ -23,35 +24,14 @@ interface ProcessingResult {
   error?: string;
 }
 
-interface RepairReport {
-  wasRepaired: boolean;
-  originalStatus: string;
-  repairedStatus: string;
-  originalVertices: number;
-  repairedVertices: number;
-  originalTriangles: number;
-  repairedTriangles: number;
-}
-
-interface RepairResult {
-  success: boolean;
-  wasRepaired?: boolean;
-  report?: RepairReport;
-  repairedFileUrl?: string;
-  error?: string;
-}
-
 interface ProcessingControlsProps {
   onProcess: () => void;
   processing: ProcessingState;
   canProcess: boolean;
   lastResult: ProcessingResult | null;
   jobId?: string;
-  onRepair?: () => void;
-  canRepair?: boolean;
-  repairState?: ProcessingState;
-  repairResult?: RepairResult | null;
-  repairJobId?: string;
+  needsRepair?: boolean;
+  meshValidation?: MeshValidation | null;
 }
 
 const ProcessingControls: React.FC<ProcessingControlsProps> = ({
@@ -60,10 +40,8 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
   canProcess,
   lastResult,
   jobId,
-  onRepair,
-  canRepair,
-  repairState,
-  repairResult,
+  needsRepair,
+  meshValidation,
 }) => {
   const [jobState, setJobState] = useState<string | null>(null);
 
@@ -108,13 +86,6 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
-  const handleDownloadRepaired = () => {
-    if (repairResult?.repairedFileUrl) {
-      const url = `${import.meta.env.VITE_API_URL || ''}${repairResult.repairedFileUrl}`;
-      window.open(url, '_blank');
-    }
-  };
-
   const handleCancelJob = async () => {
     if (!jobId) return;
 
@@ -135,9 +106,29 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
+  const buttonLabel = processing.isProcessing
+    ? 'Processing...'
+    : needsRepair
+      ? 'Repair & Split STL File'
+      : 'Split STL File';
+
   return (
     <div className="panel-section">
       <h3>Processing</h3>
+
+      {needsRepair && meshValidation && !processing.isProcessing && (
+        <div style={{
+          marginBottom: '10px',
+          padding: '8px 10px',
+          backgroundColor: 'rgba(255, 193, 7, 0.12)',
+          border: '1px solid rgba(255, 193, 7, 0.3)',
+          borderRadius: '6px',
+          fontSize: '0.8rem',
+          color: '#ffc107',
+        }}>
+          Mesh has {meshValidation.boundaryEdges} open edge{meshValidation.boundaryEdges !== 1 ? 's' : ''} (holes). Repair will be applied automatically before splitting.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button
@@ -146,22 +137,8 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
           disabled={!canProcess}
           style={{ flex: 1 }}
         >
-          {processing.isProcessing ? 'Processing...' : 'Split STL File'}
+          {buttonLabel}
         </button>
-
-        {onRepair && (
-          <button
-            className="process-button"
-            onClick={onRepair}
-            disabled={!canRepair}
-            style={{
-              flex: 1,
-              background: canRepair ? '#5a7c5a' : '#3a3a3a',
-            }}
-          >
-            {repairState?.isProcessing ? 'Repairing...' : 'Repair Mesh'}
-          </button>
-        )}
 
         {processing.isProcessing && jobId && (
           <button
@@ -193,19 +170,8 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
         </div>
       )}
 
-      {repairState?.isProcessing && (
-        <div style={{ marginTop: '12px' }}>
-          <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{ width: `${repairState.progress}%`, backgroundColor: '#5a7c5a' }}
-            />
-          </div>
-        </div>
-      )}
-
       <div className="status-text">
-        {repairState?.isProcessing || repairState?.status ? repairState.status : processing.status}
+        {processing.status}
       </div>
 
       {/* Show queue position if job is waiting */}
@@ -287,41 +253,6 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
           </div>
           <div style={{ fontSize: '0.8rem', color: '#ccc' }}>
             {lastResult.error}
-          </div>
-        </div>
-      )}
-
-      {repairResult && repairResult.success && (
-        <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#2d4a2d', borderRadius: '6px', border: '1px solid #5a7c5a' }}>
-          <div style={{ fontWeight: 'bold', color: '#7cb87c', marginBottom: '8px' }}>
-            {repairResult.wasRepaired ? 'Mesh Repaired!' : 'Mesh Already Valid'}
-          </div>
-          {repairResult.report && (
-            <div style={{ fontSize: '0.8rem', color: '#ccc', marginBottom: '8px' }}>
-              <div>Status: {repairResult.report.originalStatus} → {repairResult.report.repairedStatus}</div>
-              <div>Vertices: {repairResult.report.originalVertices.toLocaleString()} → {repairResult.report.repairedVertices.toLocaleString()}</div>
-              <div>Triangles: {repairResult.report.originalTriangles.toLocaleString()} → {repairResult.report.repairedTriangles.toLocaleString()}</div>
-            </div>
-          )}
-          {repairResult.wasRepaired && repairResult.repairedFileUrl && (
-            <button
-              className="process-button"
-              onClick={handleDownloadRepaired}
-              style={{ width: '100%', background: '#5a7c5a' }}
-            >
-              Download Repaired STL
-            </button>
-          )}
-        </div>
-      )}
-
-      {repairResult && !repairResult.success && (
-        <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#4a2d2d', borderRadius: '6px', border: '1px solid #f44336' }}>
-          <div style={{ fontWeight: 'bold', color: '#f44336', marginBottom: '8px' }}>
-            Repair Failed
-          </div>
-          <div style={{ fontSize: '0.8rem', color: '#ccc' }}>
-            {repairResult.error}
           </div>
         </div>
       )}
