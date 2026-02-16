@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { QueueStatus } from './QueueStatus';
+import { MeshValidation } from '../utils/meshValidator';
 
 interface ProcessingState {
   isProcessing: boolean;
@@ -29,6 +30,8 @@ interface ProcessingControlsProps {
   canProcess: boolean;
   lastResult: ProcessingResult | null;
   jobId?: string;
+  needsRepair?: boolean;
+  meshValidation?: MeshValidation | null;
 }
 
 const ProcessingControls: React.FC<ProcessingControlsProps> = ({
@@ -36,7 +39,9 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
   processing,
   canProcess,
   lastResult,
-  jobId
+  jobId,
+  needsRepair,
+  meshValidation,
 }) => {
   const [jobState, setJobState] = useState<string | null>(null);
 
@@ -101,9 +106,29 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
+  const buttonLabel = processing.isProcessing
+    ? 'Processing...'
+    : needsRepair
+      ? 'Repair & Split STL File'
+      : 'Split STL File';
+
   return (
     <div className="panel-section">
       <h3>Processing</h3>
+
+      {needsRepair && meshValidation && !processing.isProcessing && (
+        <div style={{
+          marginBottom: '10px',
+          padding: '8px 10px',
+          backgroundColor: 'rgba(255, 193, 7, 0.12)',
+          border: '1px solid rgba(255, 193, 7, 0.3)',
+          borderRadius: '6px',
+          fontSize: '0.8rem',
+          color: '#ffc107',
+        }}>
+          Mesh has {meshValidation.boundaryEdges} open edge{meshValidation.boundaryEdges !== 1 ? 's' : ''} (holes). Repair will be applied automatically before splitting.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button
@@ -112,7 +137,7 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
           disabled={!canProcess}
           style={{ flex: 1 }}
         >
-          {processing.isProcessing ? 'Processing...' : 'Split STL File'}
+          {buttonLabel}
         </button>
 
         {processing.isProcessing && jobId && (
@@ -137,8 +162,8 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
       {processing.isProcessing && (
         <div style={{ marginTop: '12px' }}>
           <div className="progress-bar">
-            <div 
-              className="progress-fill" 
+            <div
+              className="progress-fill"
               style={{ width: `${processing.progress}%` }}
             />
           </div>

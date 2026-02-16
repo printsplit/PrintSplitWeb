@@ -41,6 +41,29 @@ export interface ProcessingJobResult {
   downloadAllUrl?: string;
 }
 
+export interface RepairJobData {
+  jobId: string;
+  fileId: string;
+  fileName: string;
+  _cancelled?: boolean;
+}
+
+export interface RepairJobResult {
+  success: boolean;
+  jobId: string;
+  repairedFileUrl?: string;
+  report?: {
+    wasRepaired: boolean;
+    originalStatus: string;
+    repairedStatus: string;
+    originalVertices: number;
+    repairedVertices: number;
+    originalTriangles: number;
+    repairedTriangles: number;
+  };
+  error?: string;
+}
+
 export type JobState = 'waiting' | 'active' | 'completed' | 'failed';
 
 export interface JobStatus {

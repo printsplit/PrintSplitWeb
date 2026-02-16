@@ -4,6 +4,7 @@ import DimensionControls from '../components/DimensionControls';
 import STLPreview from '../components/STLPreview';
 import ProcessingControls from '../components/ProcessingControls';
 import { api } from '../api/client';
+import { validateSTLMesh, MeshValidation } from '../utils/meshValidator';
 import '../App.css';
 
 interface Dimensions {
@@ -88,6 +89,8 @@ export function HomePage() {
   });
   const [lastResult, setLastResult] = useState<ProcessingResult | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [meshValidation, setMeshValidation] = useState<MeshValidation | null>(null);
+  const [validating, setValidating] = useState(false);
 
   // Save settings to localStorage whenever they change
   const saveSettings = () => {
@@ -118,8 +121,19 @@ export function HomePage() {
     saveSettings();
   }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles]);
 
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     setSelectedFile(file);
+    setMeshValidation(null);
+    setLastResult(null);
+    setValidating(true);
+    try {
+      const validation = await validateSTLMesh(file);
+      setMeshValidation(validation);
+    } catch (error) {
+      console.warn('Mesh validation failed:', error);
+    } finally {
+      setValidating(false);
+    }
   };
 
   const handleDimensionChange = (newDimensions: Dimensions) => {
@@ -237,9 +251,11 @@ export function HomePage() {
           <ProcessingControls
             onProcess={handleProcess}
             processing={processing}
-            canProcess={!!selectedFile && !processing.isProcessing}
+            canProcess={!!selectedFile && !processing.isProcessing && !validating}
             lastResult={lastResult}
             jobId={currentJobId || undefined}
+            needsRepair={meshValidation ? !meshValidation.isValid : false}
+            meshValidation={meshValidation}
           />
 
           <div style={{ marginTop: 'auto', paddingTop: '20px', borderTop: '1px solid #2d3748', textAlign: 'center' }}>

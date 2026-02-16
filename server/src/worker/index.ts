@@ -1,5 +1,5 @@
-import { processingQueue } from './queue';
-import { ProcessingJobData, ProcessingJobResult } from '../types/job';
+import { processingQueue, repairQueue } from './queue';
+import { ProcessingJobData, ProcessingJobResult, RepairJobData, RepairJobResult } from '../types/job';
 import { getStorageClient } from '../storage/minio-client';
 import { ManifoldSplitter } from '../processing/manifold-splitter';
 import * as path from 'path';
@@ -180,6 +180,92 @@ processingQueue.process(CONCURRENCY, async (job) => {
   }
 });
 
+// Process repair jobs
+repairQueue.process(CONCURRENCY, async (job) => {
+  const data: RepairJobData = job.data;
+  console.log(`🔧 Repair job ${data.jobId}: ${data.fileName}`);
+
+  const workDir = path.join(os.tmpdir(), `repair-${data.jobId}`);
+  const inputPath = path.join(workDir, data.fileName);
+  const outputFileName = `repaired-${data.fileName}`;
+  const outputPath = path.join(workDir, outputFileName);
+
+  const splitter = new ManifoldSplitter();
+  splitter.setJobId(data.jobId);
+
+  const updateProgress = async (percent: number, message: string) => {
+    await job.progress({ percent, message });
+    console.log(`[Repair ${data.jobId}] ${percent.toFixed(1)}% - ${message}`);
+  };
+
+  try {
+    await fs.mkdir(workDir, { recursive: true });
+
+    await updateProgress(5, `Downloading file: ${data.fileName}`);
+    await storage.downloadFile(data.fileId, inputPath, 'upload');
+
+    await updateProgress(10, 'Starting repair');
+    const result = await splitter.repairSTL({
+      inputPath,
+      outputPath,
+      onProgress: updateProgress,
+    });
+
+    if (result.success && result.wasRepaired && result.outputPath) {
+      await updateProgress(90, 'Uploading repaired file');
+      const objectName = `${data.jobId}/${outputFileName}`;
+      await storage.uploadFile(result.outputPath, objectName, 'result');
+
+      const repairedFileUrl = `/api/download/${data.jobId}/${outputFileName}`;
+
+      await fs.rm(workDir, { recursive: true, force: true });
+
+      const jobResult: RepairJobResult = {
+        success: true,
+        jobId: data.jobId,
+        repairedFileUrl,
+        report: {
+          wasRepaired: result.wasRepaired,
+          originalStatus: result.report.originalStatus,
+          repairedStatus: result.report.repairedStatus,
+          originalVertices: result.report.originalVertices,
+          repairedVertices: result.report.repairedVertices,
+          originalTriangles: result.report.originalTriangles,
+          repairedTriangles: result.report.repairedTriangles,
+        },
+      };
+
+      console.log(`✅ Repair job ${data.jobId} completed!`);
+      return jobResult;
+    } else {
+      await fs.rm(workDir, { recursive: true, force: true });
+
+      const jobResult: RepairJobResult = {
+        success: result.success,
+        jobId: data.jobId,
+        report: result.wasRepaired === false && result.success ? {
+          wasRepaired: false,
+          originalStatus: result.report.originalStatus,
+          repairedStatus: result.report.repairedStatus,
+          originalVertices: result.report.originalVertices,
+          repairedVertices: result.report.repairedVertices,
+          originalTriangles: result.report.originalTriangles,
+          repairedTriangles: result.report.repairedTriangles,
+        } : undefined,
+        error: result.error,
+      };
+
+      return jobResult;
+    }
+  } catch (error) {
+    console.error(`❌ Repair job ${data.jobId} failed:`, error);
+    try {
+      await fs.rm(workDir, { recursive: true, force: true });
+    } catch {}
+    throw error;
+  }
+});
+
 // Helper function to create ZIP archive
 async function createZipArchive(filePaths: string[], outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -204,14 +290,14 @@ async function createZipArchive(filePaths: string[], outputPath: string): Promis
 process.on('SIGTERM', async () => {
   console.log('⏸️  Received SIGTERM, shutting down gracefully...');
   clearInterval(restartCheckInterval);
-  await processingQueue.close();
+  await Promise.all([processingQueue.close(), repairQueue.close()]);
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('⏸️  Received SIGINT, shutting down gracefully...');
   clearInterval(restartCheckInterval);
-  await processingQueue.close();
+  await Promise.all([processingQueue.close(), repairQueue.close()]);
   process.exit(0);
 });
 

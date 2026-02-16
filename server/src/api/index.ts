@@ -9,6 +9,7 @@ import { jobsRouter } from './routes/jobs';
 import { downloadRouter } from './routes/download';
 import { healthRouter } from './routes/health';
 import { adminRouter } from './routes/admin';
+import { repairRouter } from './routes/repair';
 import * as dotenv from 'dotenv';
 
 // Load environment variables
@@ -57,6 +58,7 @@ app.use('/api/upload', uploadRouter);
 app.use('/api/process', processRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/download', downloadRouter);
+app.use('/api/repair', repairRouter);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

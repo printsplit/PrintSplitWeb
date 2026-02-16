@@ -17,6 +17,16 @@ export interface ProcessingOptions {
   };
 }
 
+export interface RepairReport {
+  wasRepaired: boolean;
+  originalStatus: string;
+  repairedStatus: string;
+  originalVertices: number;
+  repairedVertices: number;
+  originalTriangles: number;
+  repairedTriangles: number;
+}
+
 export interface JobStatus {
   id: string;
   state: 'waiting' | 'active' | 'completed' | 'failed';
@@ -32,6 +42,10 @@ export interface JobStatus {
     }>;
     total_parts?: number;
     downloadAllUrl?: string;
+    // Repair job fields
+    repairedFileUrl?: string;
+    report?: RepairReport;
+    error?: string;
   };
   error?: string;
 }
@@ -70,6 +84,24 @@ class PrintSplitAPI {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Processing failed');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Start repair job
+   */
+  async repairSTL(options: { fileId: string; fileName: string }): Promise<{ jobId: string }> {
+    const response = await fetch(`${API_BASE_URL}/repair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Repair failed');
     }
 
     return response.json();
