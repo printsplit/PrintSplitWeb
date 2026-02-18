@@ -11,6 +11,7 @@ const storage = getStorageClient();
 
 // Worker concurrency (number of jobs processed simultaneously)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2');
+const JOB_WATCHDOG_MS = 14 * 60 * 1000; // 14 minutes - just under the 15 min Bull timeout
 
 console.log(`🚀 Starting STL Processing Worker (concurrency: ${CONCURRENCY})`);
 
@@ -56,6 +57,11 @@ processingQueue.process(CONCURRENCY, async (job) => {
     await job.progress({ percent, message });
     console.log(`[Job ${data.jobId}] ${percent.toFixed(1)}% - ${message}`);
   };
+
+  // Watchdog timer - logs a warning before Bull's timeout kills the job
+  const watchdog = setTimeout(() => {
+    console.error(`🐕 WATCHDOG: Job ${data.jobId} exceeded ${JOB_WATCHDOG_MS / 60000} minutes - Bull timeout will fire soon`);
+  }, JOB_WATCHDOG_MS);
 
   try {
     // Create working directories
@@ -166,9 +172,11 @@ processingQueue.process(CONCURRENCY, async (job) => {
       downloadAllUrl,
     };
 
+    clearTimeout(watchdog);
     console.log(`✅ Job ${data.jobId} completed successfully!`);
     return jobResult;
   } catch (error) {
+    clearTimeout(watchdog);
     console.error(`❌ Job ${data.jobId} failed:`, error);
 
     // Clean up on error
@@ -198,6 +206,11 @@ repairQueue.process(CONCURRENCY, async (job) => {
     console.log(`[Repair ${data.jobId}] ${percent.toFixed(1)}% - ${message}`);
   };
 
+  // Watchdog for repair jobs (2 min timeout in queue config)
+  const repairWatchdog = setTimeout(() => {
+    console.error(`🐕 WATCHDOG: Repair job ${data.jobId} exceeded timeout - Bull timeout will fire soon`);
+  }, 110000); // 110 seconds, just under 2 min queue timeout
+
   try {
     await fs.mkdir(workDir, { recursive: true });
 
@@ -210,6 +223,8 @@ repairQueue.process(CONCURRENCY, async (job) => {
       outputPath,
       onProgress: updateProgress,
     });
+
+    clearTimeout(repairWatchdog);
 
     if (result.success && result.wasRepaired && result.outputPath) {
       await updateProgress(90, 'Uploading repaired file');
@@ -258,6 +273,7 @@ repairQueue.process(CONCURRENCY, async (job) => {
       return jobResult;
     }
   } catch (error) {
+    clearTimeout(repairWatchdog);
     console.error(`❌ Repair job ${data.jobId} failed:`, error);
     try {
       await fs.rm(workDir, { recursive: true, force: true });

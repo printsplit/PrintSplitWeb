@@ -6,11 +6,8 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 // Create processing queue
 export const processingQueue = new Bull<ProcessingJobData>('stl-processing', REDIS_URL, {
   defaultJobOptions: {
-    attempts: 3,
-    backoff: {
-      type: 'exponential',
-      delay: 2000,
-    },
+    attempts: 1, // No retries - bad files will just fail again
+    timeout: 900000, // 15 minutes - auto-fail hung jobs
     removeOnComplete: {
       age: 48 * 3600, // Keep completed jobs for 48 hours
       count: 1000,
@@ -20,10 +17,10 @@ export const processingQueue = new Bull<ProcessingJobData>('stl-processing', RED
     },
   },
   settings: {
-    lockDuration: 600000, // 10 minutes - allow long processing for large STL files
+    lockDuration: 960000, // 16 minutes - slightly longer than job timeout to avoid race
     lockRenewTime: 30000, // Renew lock every 30 seconds to keep job alive
     stalledInterval: 60000, // Check for stalled jobs every 60 seconds
-    maxStalledCount: 2, // Allow job to stall twice before giving up
+    maxStalledCount: 1, // Fail immediately on stall - don't retry stuck jobs
   },
 });
 
@@ -115,4 +112,50 @@ export async function addRepairJob(data: RepairJobData): Promise<string> {
 
 export async function getRepairJobStatus(jobId: string): Promise<Bull.Job<RepairJobData> | null> {
   return await repairQueue.getJob(jobId);
+}
+
+/**
+ * Force-fail an active job that's stuck.
+ * Uses moveToFailed() to immediately move the job out of active state.
+ */
+export async function forceFailJob(jobId: string): Promise<boolean> {
+  const job = await processingQueue.getJob(jobId);
+  if (!job) return false;
+
+  const state = await job.getState();
+  if (state !== 'active') return false;
+
+  await job.moveToFailed({ message: 'Force-failed by admin: job was stuck' }, true);
+  return true;
+}
+
+/**
+ * Force-fail a repair job that's stuck.
+ */
+export async function forceFailRepairJob(jobId: string): Promise<boolean> {
+  const job = await repairQueue.getJob(jobId);
+  if (!job) return false;
+
+  const state = await job.getState();
+  if (state !== 'active') return false;
+
+  await job.moveToFailed({ message: 'Force-failed by admin: job was stuck' }, true);
+  return true;
+}
+
+/**
+ * Clean the queue by removing jobs in specific states.
+ * Returns the number of jobs removed.
+ */
+export async function cleanQueue(state: 'completed' | 'failed' | 'delayed' | 'wait'): Promise<number> {
+  const cleaned = await processingQueue.clean(0, state);
+  return cleaned.length;
+}
+
+/**
+ * Clean the repair queue.
+ */
+export async function cleanRepairQueue(state: 'completed' | 'failed' | 'delayed' | 'wait'): Promise<number> {
+  const cleaned = await repairQueue.clean(0, state);
+  return cleaned.length;
 }

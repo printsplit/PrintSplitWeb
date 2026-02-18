@@ -134,6 +134,63 @@ export function AdminDashboard() {
     }
   };
 
+  const handleForceFailJob = async (jobId: string) => {
+    if (!token) return;
+
+    if (!confirm(`Force-fail job ${jobId.substring(0, 8)}...? This immediately moves it to failed state.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/admin/jobs/${jobId}/force-fail`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to force-fail job');
+      }
+
+      fetchStats();
+    } catch (err: any) {
+      alert(`Failed to force-fail job: ${err.message}`);
+      console.error('Force-fail error:', err);
+    }
+  };
+
+  const handleCleanQueue = async (state: string) => {
+    if (!token) return;
+
+    if (!confirm(`Clean all ${state} jobs from the queue?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/admin/queue/clean', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ state }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to clean queue');
+      }
+
+      const data = await response.json();
+      alert(data.message);
+      fetchStats();
+    } catch (err: any) {
+      alert(`Failed to clean queue: ${err.message}`);
+      console.error('Queue clean error:', err);
+    }
+  };
+
   const handleRestartWorker = async () => {
     if (!token) return;
 
@@ -440,7 +497,7 @@ export function AdminDashboard() {
                         <td style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
                           {formatDuration(Date.now() - job.startedAt)}
                         </td>
-                        <td style={{ padding: '0.75rem' }}>
+                        <td style={{ padding: '0.75rem', display: 'flex', gap: '0.5rem' }}>
                           <button
                             onClick={() => handleKillJob(job.id)}
                             style={{
@@ -454,8 +511,26 @@ export function AdminDashboard() {
                             }}
                             onMouseEnter={(e) => e.currentTarget.style.background = '#c82333'}
                             onMouseLeave={(e) => e.currentTarget.style.background = '#dc3545'}
+                            title="Set cancellation flag (cooperative - waits for next check)"
                           >
                             Kill
+                          </button>
+                          <button
+                            onClick={() => handleForceFailJob(job.id)}
+                            style={{
+                              padding: '0.375rem 0.75rem',
+                              fontSize: '0.75rem',
+                              background: '#6f42c1',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#5a32a3'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = '#6f42c1'}
+                            title="Immediately move job to failed state (use when Kill doesn't work)"
+                          >
+                            Force Fail
                           </button>
                         </td>
                       </tr>
@@ -465,6 +540,68 @@ export function AdminDashboard() {
               </div>
             </div>
           )}
+          {/* Queue Maintenance */}
+          <div style={{
+            background: 'white',
+            padding: '1.5rem',
+            borderRadius: '8px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            marginTop: '2rem',
+          }}>
+            <h2 style={{ margin: '0 0 1rem', fontSize: '1.25rem', color: '#333' }}>
+              Queue Maintenance
+            </h2>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleCleanQueue('failed')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem',
+                  background: '#dc3545',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#c82333'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#dc3545'}
+              >
+                Clean Failed Jobs ({stats.queue.failed})
+              </button>
+              <button
+                onClick={() => handleCleanQueue('completed')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem',
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#5a6268'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#6c757d'}
+              >
+                Clean Completed Jobs ({stats.queue.completed})
+              </button>
+              <button
+                onClick={() => handleCleanQueue('wait')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem',
+                  background: '#ffc107',
+                  color: '#333',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#e0a800'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#ffc107'}
+              >
+                Drain Waiting Jobs ({stats.queue.waiting})
+              </button>
+            </div>
+          </div>
         </>
       )}
     </div>
