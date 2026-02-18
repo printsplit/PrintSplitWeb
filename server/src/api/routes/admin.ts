@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticateAdmin, adminLogin } from '../middleware/auth';
-import { processingQueue } from '../../worker/queue';
+import { processingQueue, forceFailJob, forceFailRepairJob, cleanQueue, cleanRepairQueue } from '../../worker/queue';
 import { JobStatus } from '../../types/job';
 
 const router = express.Router();
@@ -342,6 +342,71 @@ router.post('/worker/restart', authenticateAdmin, async (req, res) => {
     res.status(500).json({
       error: error.message || 'Failed to signal worker restart',
     });
+  }
+});
+
+/**
+ * POST /api/admin/jobs/:id/force-fail
+ * Force-fail a stuck active job (moves it to failed state immediately)
+ */
+router.post('/jobs/:id/force-fail', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Try processing queue first, then repair queue
+    let success = await forceFailJob(id);
+    if (!success) {
+      success = await forceFailRepairJob(id);
+    }
+
+    if (!success) {
+      return res.status(404).json({
+        error: 'Job not found or not in active state. Only active (stuck) jobs can be force-failed.',
+      });
+    }
+
+    console.log(`⚠️  Admin force-failed stuck job ${id}`);
+    res.json({
+      success: true,
+      message: `Job ${id} has been force-failed and removed from the active queue.`,
+    });
+  } catch (error: any) {
+    console.error('Force-fail error:', error);
+    res.status(500).json({ error: error.message || 'Failed to force-fail job' });
+  }
+});
+
+/**
+ * POST /api/admin/queue/clean
+ * Clean jobs from the queue by state
+ * Body: { state: 'completed' | 'failed' | 'delayed' | 'wait', includeRepair?: boolean }
+ */
+router.post('/queue/clean', authenticateAdmin, async (req, res) => {
+  try {
+    const { state, includeRepair = true } = req.body;
+
+    const validStates = ['completed', 'failed', 'delayed', 'wait'];
+    if (!state || !validStates.includes(state)) {
+      return res.status(400).json({
+        error: `Invalid state. Must be one of: ${validStates.join(', ')}`,
+      });
+    }
+
+    let totalCleaned = await cleanQueue(state);
+
+    if (includeRepair) {
+      totalCleaned += await cleanRepairQueue(state);
+    }
+
+    console.log(`🧹 Admin cleaned ${totalCleaned} ${state} jobs from queue`);
+    res.json({
+      success: true,
+      message: `Cleaned ${totalCleaned} ${state} job(s) from the queue.`,
+      cleaned: totalCleaned,
+    });
+  } catch (error: any) {
+    console.error('Queue clean error:', error);
+    res.status(500).json({ error: error.message || 'Failed to clean queue' });
   }
 });
 
