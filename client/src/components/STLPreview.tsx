@@ -18,13 +18,37 @@ interface ProcessingResult {
   error?: string;
 }
 
+interface SplitPositions {
+  x: number[];
+  y: number[];
+  z: number[];
+}
+
 interface STLPreviewProps {
   file: File | null;
   dimensions: { x: number; y: number; z: number };
   processingResult?: ProcessingResult | null;
+  splitPositions?: SplitPositions | null;
+  onSplitPositionsChange?: (positions: SplitPositions) => void;
 }
 
-const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingResult }) => {
+interface DragState {
+  isDragging: boolean;
+  plane: THREE.Mesh | null;
+  axis: 'x' | 'y' | 'z';
+  index: number;
+  startPos: number;
+  dragPlane: THREE.Plane;
+  offset: number;
+}
+
+interface ModelInfo {
+  scaleFactor: number;
+  sceneBounds: { min: THREE.Vector3; max: THREE.Vector3 };
+  originalSize: THREE.Vector3;
+}
+
+const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingResult, splitPositions, onSplitPositionsChange }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -36,6 +60,24 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
   const [sceneReady, setSceneReady] = useState(false);
   const [viewMode, setViewMode] = useState<'original' | 'parts' | 'both'>('original');
   const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
+
+  // Drag state refs
+  const dragStateRef = useRef<DragState>({
+    isDragging: false,
+    plane: null,
+    axis: 'x',
+    index: 0,
+    startPos: 0,
+    dragPlane: new THREE.Plane(),
+    offset: 0,
+  });
+  const modelInfoRef = useRef<ModelInfo | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseRef = useRef(new THREE.Vector2());
+
+  // Stable ref for callback to avoid effect re-runs on every render
+  const onSplitPositionsChangeRef = useRef(onSplitPositionsChange);
+  onSplitPositionsChangeRef.current = onSplitPositionsChange;
 
   useEffect(() => {
     console.log('Scene initialization effect triggered');
@@ -139,12 +181,251 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
     };
   }, []);
 
+  // Pointer event handlers for dragging cut planes
+  useEffect(() => {
+    if (!sceneReady || !rendererRef.current) return;
+    const canvas = rendererRef.current.domElement;
+
+    const MIN_GAP_MM = 5; // Minimum gap between planes in mm
+
+    const getCutPlaneMeshes = (): THREE.Mesh[] => {
+      if (!sceneRef.current) return [];
+      return sceneRef.current.children.filter(
+        (c): c is THREE.Mesh => c.userData.isCutPlane === true
+      );
+    };
+
+    const sceneToMm = (scenePos: number, axis: 'x' | 'y' | 'z'): number => {
+      const info = modelInfoRef.current;
+      if (!info) return 0;
+      const axisIdx = axis === 'x' ? 'x' : axis === 'y' ? 'y' : 'z';
+      const sceneBoundsMin = info.sceneBounds.min[axisIdx];
+      return (scenePos - sceneBoundsMin) / info.scaleFactor;
+    };
+
+
+    const collectPositions = (): SplitPositions => {
+      const positions: SplitPositions = { x: [], y: [], z: [] };
+      for (const mesh of getCutPlaneMeshes()) {
+        const axis = mesh.userData.axis as 'x' | 'y' | 'z';
+        const posComponent = axis === 'x' ? mesh.position.x : axis === 'y' ? mesh.position.y : mesh.position.z;
+        positions[axis].push(sceneToMm(posComponent, axis));
+      }
+      positions.x.sort((a, b) => a - b);
+      positions.y.sort((a, b) => a - b);
+      positions.z.sort((a, b) => a - b);
+      return positions;
+    };
+
+    const updateMouseFromEvent = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!cameraRef.current || !sceneRef.current || !onSplitPositionsChangeRef.current) return;
+
+      updateMouseFromEvent(e);
+      raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+
+      const cutPlanes = getCutPlaneMeshes();
+      const intersects = raycasterRef.current.intersectObjects(cutPlanes);
+
+      if (intersects.length > 0) {
+        const hit = intersects[0].object as THREE.Mesh;
+        const axis = hit.userData.axis as 'x' | 'y' | 'z';
+        const index = hit.userData.index as number;
+
+        // Build a drag plane perpendicular to the camera but constraining movement along the cut axis
+        const cameraDir = new THREE.Vector3();
+        cameraRef.current.getWorldDirection(cameraDir);
+
+        // Use a plane that contains the hit point and is perpendicular to the camera
+        const dragPlane = new THREE.Plane();
+        dragPlane.setFromNormalAndCoplanarPoint(cameraDir, intersects[0].point);
+
+        const currentPos = axis === 'x' ? hit.position.x : axis === 'y' ? hit.position.y : hit.position.z;
+
+        dragStateRef.current = {
+          isDragging: true,
+          plane: hit,
+          axis,
+          index,
+          startPos: currentPos,
+          dragPlane,
+          offset: currentPos - (axis === 'x' ? intersects[0].point.x : axis === 'y' ? intersects[0].point.y : intersects[0].point.z),
+        };
+
+        // Disable orbit controls while dragging
+        if (controlsRef.current) {
+          controlsRef.current.enabled = false;
+        }
+
+        // Highlight the dragged plane
+        const mat = hit.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.5;
+
+        canvas.style.cursor = 'grabbing';
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!cameraRef.current) return;
+      updateMouseFromEvent(e);
+
+      const ds = dragStateRef.current;
+
+      if (ds.isDragging && ds.plane && modelInfoRef.current) {
+        raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+
+        const intersectPoint = new THREE.Vector3();
+        if (raycasterRef.current.ray.intersectPlane(ds.dragPlane, intersectPoint)) {
+          const rawPos = (ds.axis === 'x' ? intersectPoint.x : ds.axis === 'y' ? intersectPoint.y : intersectPoint.z) + ds.offset;
+
+          const info = modelInfoRef.current;
+          const boundsMin = ds.axis === 'x' ? info.sceneBounds.min.x : ds.axis === 'y' ? info.sceneBounds.min.y : info.sceneBounds.min.z;
+          const boundsMax = ds.axis === 'x' ? info.sceneBounds.max.x : ds.axis === 'y' ? info.sceneBounds.max.y : info.sceneBounds.max.z;
+
+          const minGapScene = MIN_GAP_MM * info.scaleFactor;
+
+          // Clamp within model bounds with minimum gap from edges
+          let clampedPos = Math.max(boundsMin + minGapScene, Math.min(boundsMax - minGapScene, rawPos));
+
+          // Enforce minimum gap between adjacent planes
+          const samAxisPlanes = getCutPlaneMeshes()
+            .filter(m => m.userData.axis === ds.axis && m !== ds.plane)
+            .map(m => ds.axis === 'x' ? m.position.x : ds.axis === 'y' ? m.position.y : m.position.z)
+            .sort((a, b) => a - b);
+
+          for (const otherPos of samAxisPlanes) {
+            if (Math.abs(clampedPos - otherPos) < minGapScene) {
+              clampedPos = clampedPos < otherPos ? otherPos - minGapScene : otherPos + minGapScene;
+            }
+          }
+
+          // Update plane position
+          if (ds.axis === 'x') ds.plane.position.x = clampedPos;
+          else if (ds.axis === 'y') ds.plane.position.y = clampedPos;
+          else ds.plane.position.z = clampedPos;
+
+          // Rebuild cube outlines during drag
+          rebuildCubeOutlines();
+        }
+      } else {
+        // Hover feedback
+        raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+        const cutPlanes = getCutPlaneMeshes();
+        const intersects = raycasterRef.current.intersectObjects(cutPlanes);
+        canvas.style.cursor = intersects.length > 0 && onSplitPositionsChangeRef.current ? 'grab' : '';
+
+        // Reset opacity for non-hovered planes
+        for (const mesh of cutPlanes) {
+          const mat = mesh.material as THREE.MeshBasicMaterial;
+          mat.opacity = intersects.length > 0 && intersects[0].object === mesh ? 0.35 : 0.2;
+        }
+      }
+    };
+
+    const rebuildCubeOutlines = () => {
+      if (!sceneRef.current || !modelInfoRef.current) return;
+      // Remove existing cube outlines
+      const toRemove = sceneRef.current.children.filter(c => c.userData.isCubeOutline);
+      toRemove.forEach(obj => sceneRef.current!.remove(obj));
+
+      const info = modelInfoRef.current;
+      const min = info.sceneBounds.min;
+      const max = info.sceneBounds.max;
+
+      // Get plane positions per axis
+      const getAxisPositions = (axis: 'x' | 'y' | 'z'): number[] => {
+        const positions = getCutPlaneMeshes()
+          .filter(m => m.userData.axis === axis)
+          .map(m => axis === 'x' ? m.position.x : axis === 'y' ? m.position.y : m.position.z)
+          .sort((a, b) => a - b);
+        const axisMin = axis === 'x' ? min.x : axis === 'y' ? min.y : min.z;
+        const axisMax = axis === 'x' ? max.x : axis === 'y' ? max.y : max.z;
+        return [axisMin, ...positions, axisMax];
+      };
+
+      const xBounds = getAxisPositions('x');
+      const yBounds = getAxisPositions('y');
+      const zBounds = getAxisPositions('z');
+
+      const cubeOutlineMaterial = new THREE.LineBasicMaterial({
+        color: 0xffffff,
+        opacity: 0.3,
+        transparent: true
+      });
+
+      for (let xi = 0; xi < xBounds.length - 1; xi++) {
+        for (let yi = 0; yi < yBounds.length - 1; yi++) {
+          for (let zi = 0; zi < zBounds.length - 1; zi++) {
+            const sx = xBounds[xi + 1] - xBounds[xi];
+            const sy = yBounds[yi + 1] - yBounds[yi];
+            const sz = zBounds[zi + 1] - zBounds[zi];
+            const cubeGeometry = new THREE.BoxGeometry(sx, sy, sz);
+            const cubeWireframe = new THREE.WireframeGeometry(cubeGeometry);
+            const cubeLine = new THREE.LineSegments(cubeWireframe, cubeOutlineMaterial);
+            cubeLine.position.set(
+              (xBounds[xi] + xBounds[xi + 1]) / 2,
+              (yBounds[yi] + yBounds[yi + 1]) / 2,
+              (zBounds[zi] + zBounds[zi + 1]) / 2
+            );
+            cubeLine.userData.isModel = true;
+            cubeLine.userData.isCubeOutline = true;
+            sceneRef.current!.add(cubeLine);
+          }
+        }
+      }
+    };
+
+    const onPointerUp = () => {
+      const ds = dragStateRef.current;
+      if (ds.isDragging && ds.plane) {
+        // Reset opacity
+        const mat = ds.plane.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.2;
+
+        // Re-enable orbit controls
+        if (controlsRef.current) {
+          controlsRef.current.enabled = true;
+        }
+
+        // Collect all positions and notify parent
+        if (onSplitPositionsChangeRef.current) {
+          const positions = collectPositions();
+          onSplitPositionsChangeRef.current(positions);
+        }
+
+        ds.isDragging = false;
+        ds.plane = null;
+        canvas.style.cursor = '';
+      }
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    return () => {
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+  }, [sceneReady]);
+
   useEffect(() => {
     console.log('STLPreview effect triggered:', { file: file?.name, dimensions, viewMode, processingResult, sceneReady });
     if (!sceneReady || !sceneRef.current) {
       console.log('Scene not ready, returning');
       return;
     }
+
+    // Cancellation flag to prevent stale async loads from overwriting the scene
+    let cancelled = false;
 
     const loadContent = async () => {
       setLoading(true);
@@ -153,9 +434,11 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
       try {
         // Clear previous models and visualizations
         const objectsToRemove = sceneRef.current!.children.filter(
-          child => child.userData.isModel || child.userData.isCutLine || child.userData.isCubeOutline
+          child => child.userData.isModel || child.userData.isCutLine || child.userData.isCubeOutline || child.userData.isCutPlane
         );
         objectsToRemove.forEach(obj => sceneRef.current!.remove(obj));
+
+        if (cancelled) return;
 
         if (viewMode === 'original' && file) {
           await loadOriginalSTL(file);
@@ -165,9 +448,12 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
           await loadBothViews(file, processingResult.parts);
         }
 
+        if (cancelled) return;
+
         console.log('Content loaded successfully');
         setLoading(false);
       } catch (error) {
+        if (cancelled) return;
         console.error('Error loading content:', error);
         setError('Failed to load content');
         setLoading(false);
@@ -175,7 +461,11 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
     };
 
     loadContent();
-  }, [file, dimensions, viewMode, processingResult, sceneReady]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, dimensions, viewMode, processingResult, sceneReady, splitPositions]);
 
   const loadSTLFile = async (source: File | string): Promise<{ geometry: THREE.BufferGeometry; originalSize: THREE.Vector3 }> => {
     console.log('Reading STL file:', source instanceof File ? source.name : source);
@@ -379,170 +669,175 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
 
   const addSplitGridVisualization = (modelSize: THREE.Vector3, mesh: THREE.Mesh) => {
     if (!sceneRef.current) return;
-    
+
     // Get mesh bounding box in world coordinates
     const box = new THREE.Box3().setFromObject(mesh);
     const size = new THREE.Vector3();
     box.getSize(size);
-    const min = box.min;
-    const max = box.max;
-
-    console.log('Model bounding box:', {
-      min: { x: min.x, y: min.y, z: min.z },
-      max: { x: max.x, y: max.y, z: max.z },
-      size: { x: size.x, y: size.y, z: size.z }
-    });
+    const min = box.min.clone();
+    const max = box.max.clone();
 
     // Convert cube dimensions from mm to model units (approximate scale factor)
-    // Since we scale the model to fit in 4 units max, we need to calculate the scale factor
     const maxModelDimension = Math.max(size.x, size.y, size.z);
     const scaleFactorApprox = maxModelDimension / Math.max(modelSize.x, modelSize.y, modelSize.z);
-    
-    const cubeX = (dimensions.x * scaleFactorApprox);
-    const cubeY = (dimensions.y * scaleFactorApprox);
-    const cubeZ = (dimensions.z * scaleFactorApprox);
 
-    console.log('Cube dimensions in model units:', { cubeX, cubeY, cubeZ });
-    console.log('Scale factor:', scaleFactorApprox);
-
-    // Calculate how many sections are needed based on actual cube sizes
-    const sections = {
-      x: Math.max(1, Math.ceil(size.x / cubeX)),
-      y: Math.max(1, Math.ceil(size.y / cubeY)),
-      z: Math.max(1, Math.ceil(size.z / cubeZ))
+    // Store model info for drag unit conversion
+    modelInfoRef.current = {
+      scaleFactor: scaleFactorApprox,
+      sceneBounds: { min: min.clone(), max: max.clone() },
+      originalSize: modelSize.clone(),
     };
 
-    console.log('Grid sections:', sections);
+    // Determine cut plane positions (in scene units)
+    let xCuts: number[] = [];
+    let yCuts: number[] = [];
+    let zCuts: number[] = [];
+
+    if (splitPositions) {
+      // Manual mode: convert mm positions to scene units
+      xCuts = splitPositions.x.map(mm => min.x + mm * scaleFactorApprox);
+      yCuts = splitPositions.y.map(mm => min.y + mm * scaleFactorApprox);
+      zCuts = splitPositions.z.map(mm => min.z + mm * scaleFactorApprox);
+    } else {
+      // Uniform mode: compute from dimensions
+      const cubeX = dimensions.x * scaleFactorApprox;
+      const cubeY = dimensions.y * scaleFactorApprox;
+      const cubeZ = dimensions.z * scaleFactorApprox;
+
+      const sectionsX = Math.max(1, Math.ceil(size.x / cubeX));
+      const sectionsY = Math.max(1, Math.ceil(size.y / cubeY));
+      const sectionsZ = Math.max(1, Math.ceil(size.z / cubeZ));
+
+      for (let i = 1; i < sectionsX; i++) xCuts.push(min.x + i * cubeX);
+      for (let i = 1; i < sectionsY; i++) yCuts.push(min.y + i * cubeY);
+      for (let i = 1; i < sectionsZ; i++) zCuts.push(min.z + i * cubeZ);
+    }
 
     // Only show grid if splitting is needed
-    if (sections.x === 1 && sections.y === 1 && sections.z === 1) return;
+    if (xCuts.length === 0 && yCuts.length === 0 && zCuts.length === 0) return;
 
-    // Create different materials for different axes
-    const xAxisMaterial = new THREE.LineBasicMaterial({ 
-      color: 0xff4444,  // Red for X cuts
-      opacity: 0.8,
-      transparent: true,
-      linewidth: 2
-    });
+    const createCutPlaneMesh = (
+      axis: 'x' | 'y' | 'z',
+      position: number,
+      index: number,
+      color: number
+    ) => {
+      let planeWidth: number, planeHeight: number;
+      if (axis === 'x') {
+        planeWidth = size.z;
+        planeHeight = size.y;
+      } else if (axis === 'y') {
+        planeWidth = size.x;
+        planeHeight = size.z;
+      } else {
+        planeWidth = size.x;
+        planeHeight = size.y;
+      }
 
-    const yAxisMaterial = new THREE.LineBasicMaterial({ 
-      color: 0x44ff44,  // Green for Y cuts
-      opacity: 0.8,
-      transparent: true,
-      linewidth: 2
-    });
+      const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      const planeMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
 
-    const zAxisMaterial = new THREE.LineBasicMaterial({ 
-      color: 0x4444ff,  // Blue for Z cuts
-      opacity: 0.8,
-      transparent: true,
-      linewidth: 2
-    });
+      const planeMesh = new THREE.Mesh(planeGeo, planeMat);
 
-    // X-axis cuts (YZ planes)
-    for (let i = 1; i < sections.x; i++) {
-      const x = min.x + (i * cubeX);
-      
-      // Create a plane that spans the full model height and depth
-      const points = [
-        // Front face of cutting plane
-        new THREE.Vector3(x, min.y, min.z),
-        new THREE.Vector3(x, max.y, min.z),
-        new THREE.Vector3(x, max.y, max.z),
-        new THREE.Vector3(x, min.y, max.z),
-        new THREE.Vector3(x, min.y, min.z), // Close the loop
-      ];
-      
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, xAxisMaterial);
-      line.userData.isModel = true;
-      line.userData.isCutLine = true;
-      sceneRef.current.add(line);
-    }
+      // Orient and position the plane
+      if (axis === 'x') {
+        planeMesh.rotation.y = Math.PI / 2;
+        planeMesh.position.set(position, (min.y + max.y) / 2, (min.z + max.z) / 2);
+      } else if (axis === 'y') {
+        planeMesh.rotation.x = Math.PI / 2;
+        planeMesh.position.set((min.x + max.x) / 2, position, (min.z + max.z) / 2);
+      } else {
+        planeMesh.position.set((min.x + max.x) / 2, (min.y + max.y) / 2, position);
+      }
 
-    // Y-axis cuts (XZ planes)
-    for (let i = 1; i < sections.y; i++) {
-      const y = min.y + (i * cubeY);
-      
-      const points = [
-        // Horizontal cutting plane
-        new THREE.Vector3(min.x, y, min.z),
-        new THREE.Vector3(max.x, y, min.z),
-        new THREE.Vector3(max.x, y, max.z),
-        new THREE.Vector3(min.x, y, max.z),
-        new THREE.Vector3(min.x, y, min.z), // Close the loop
-      ];
-      
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, yAxisMaterial);
-      line.userData.isModel = true;
-      line.userData.isCutLine = true;
-      sceneRef.current.add(line);
-    }
+      planeMesh.userData.isModel = true;
+      planeMesh.userData.isCutPlane = true;
+      planeMesh.userData.isCutLine = true; // Keep for cleanup compatibility
+      planeMesh.userData.axis = axis;
+      planeMesh.userData.index = index;
 
-    // Z-axis cuts (XY planes)
-    for (let i = 1; i < sections.z; i++) {
-      const z = min.z + (i * cubeZ);
-      
-      const points = [
-        // Horizontal cutting plane at Z level
-        new THREE.Vector3(min.x, min.y, z),
-        new THREE.Vector3(max.x, min.y, z),
-        new THREE.Vector3(max.x, max.y, z),
-        new THREE.Vector3(min.x, max.y, z),
-        new THREE.Vector3(min.x, min.y, z), // Close the loop
-      ];
-      
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, zAxisMaterial);
-      line.userData.isModel = true;
-      line.userData.isCutLine = true;
-      sceneRef.current.add(line);
-    }
+      sceneRef.current!.add(planeMesh);
 
-    // Add cube boundary visualization
-    if (sections.x > 1 || sections.y > 1 || sections.z > 1) {
-      const cubeOutlineMaterial = new THREE.LineBasicMaterial({ 
+      // Also add an outline ring around the plane for visibility
+      const outlinePoints: THREE.Vector3[] = [];
+      if (axis === 'x') {
+        outlinePoints.push(
+          new THREE.Vector3(position, min.y, min.z),
+          new THREE.Vector3(position, max.y, min.z),
+          new THREE.Vector3(position, max.y, max.z),
+          new THREE.Vector3(position, min.y, max.z),
+          new THREE.Vector3(position, min.y, min.z),
+        );
+      } else if (axis === 'y') {
+        outlinePoints.push(
+          new THREE.Vector3(min.x, position, min.z),
+          new THREE.Vector3(max.x, position, min.z),
+          new THREE.Vector3(max.x, position, max.z),
+          new THREE.Vector3(min.x, position, max.z),
+          new THREE.Vector3(min.x, position, min.z),
+        );
+      } else {
+        outlinePoints.push(
+          new THREE.Vector3(min.x, min.y, position),
+          new THREE.Vector3(max.x, min.y, position),
+          new THREE.Vector3(max.x, max.y, position),
+          new THREE.Vector3(min.x, max.y, position),
+          new THREE.Vector3(min.x, min.y, position),
+        );
+      }
+
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(outlinePoints);
+      const lineMat = new THREE.LineBasicMaterial({ color, opacity: 0.8, transparent: true, linewidth: 2 });
+      const outline = new THREE.Line(lineGeo, lineMat);
+      outline.userData.isModel = true;
+      outline.userData.isCutLine = true;
+      outline.userData.parentCutPlane = planeMesh.id; // Link outline to plane for updates
+      sceneRef.current!.add(outline);
+    };
+
+    // Create cut plane meshes
+    xCuts.forEach((pos, i) => createCutPlaneMesh('x', pos, i, 0xff4444));
+    yCuts.forEach((pos, i) => createCutPlaneMesh('y', pos, i, 0x44ff44));
+    zCuts.forEach((pos, i) => createCutPlaneMesh('z', pos, i, 0x4444ff));
+
+    // Build boundary arrays for cube outlines
+    const xBounds = [min.x, ...xCuts.sort((a, b) => a - b), max.x];
+    const yBounds = [min.y, ...yCuts.sort((a, b) => a - b), max.y];
+    const zBounds = [min.z, ...zCuts.sort((a, b) => a - b), max.z];
+
+    if (xBounds.length > 2 || yBounds.length > 2 || zBounds.length > 2) {
+      const cubeOutlineMaterial = new THREE.LineBasicMaterial({
         color: 0xffffff,
         opacity: 0.3,
         transparent: true
       });
 
-      // Draw cube boundaries to show the grid
-      for (let x = 0; x < sections.x; x++) {
-        for (let y = 0; y < sections.y; y++) {
-          for (let z = 0; z < sections.z; z++) {
-            const cubeMin = new THREE.Vector3(
-              min.x + x * cubeX,
-              min.y + y * cubeY,
-              min.z + z * cubeZ
-            );
-            
-            const cubeMax = new THREE.Vector3(
-              Math.min(min.x + (x + 1) * cubeX, max.x),
-              Math.min(min.y + (y + 1) * cubeY, max.y),
-              Math.min(min.z + (z + 1) * cubeZ, max.z)
-            );
+      for (let xi = 0; xi < xBounds.length - 1; xi++) {
+        for (let yi = 0; yi < yBounds.length - 1; yi++) {
+          for (let zi = 0; zi < zBounds.length - 1; zi++) {
+            const sx = xBounds[xi + 1] - xBounds[xi];
+            const sy = yBounds[yi + 1] - yBounds[yi];
+            const sz = zBounds[zi + 1] - zBounds[zi];
 
-            // Create wireframe cube outline
-            const cubeGeometry = new THREE.BoxGeometry(
-              cubeMax.x - cubeMin.x,
-              cubeMax.y - cubeMin.y,
-              cubeMax.z - cubeMin.z
-            );
-            
+            const cubeGeometry = new THREE.BoxGeometry(sx, sy, sz);
             const cubeWireframe = new THREE.WireframeGeometry(cubeGeometry);
             const cubeLine = new THREE.LineSegments(cubeWireframe, cubeOutlineMaterial);
-            
+
             cubeLine.position.set(
-              (cubeMin.x + cubeMax.x) / 2,
-              (cubeMin.y + cubeMax.y) / 2,
-              (cubeMin.z + cubeMax.z) / 2
+              (xBounds[xi] + xBounds[xi + 1]) / 2,
+              (yBounds[yi] + yBounds[yi + 1]) / 2,
+              (zBounds[zi] + zBounds[zi + 1]) / 2
             );
-            
+
             cubeLine.userData.isModel = true;
             cubeLine.userData.isCubeOutline = true;
-            sceneRef.current.add(cubeLine);
+            sceneRef.current!.add(cubeLine);
           }
         }
       }

@@ -93,6 +93,7 @@ processingQueue.process(CONCURRENCY, async (job) => {
         dimensions: data.dimensions,
         smartBoundaries: data.smartBoundaries,
         balancedCutting: data.balancedCutting,
+        splitPositions: data.splitPositions,
         alignmentHoles: data.alignmentHoles,
         onProgress: updateProgress, // Pass progress callback
       });

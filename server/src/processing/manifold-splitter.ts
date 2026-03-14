@@ -887,6 +887,45 @@ export class ManifoldSplitter {
       console.log('Split sections:', sections);
       console.log('Piece sizes:', pieceSizes);
 
+      // Build boundary arrays for cutting
+      // These arrays define the exact positions of cuts along each axis
+      let xBoundaries: number[];
+      let yBoundaries: number[];
+      let zBoundaries: number[];
+
+      if (options.splitPositions) {
+        // Custom split positions mode
+        // Positions are offsets from the model's min bound (in mm), convert to absolute coordinates
+        const sortedX = [...options.splitPositions.x].sort((a, b) => a - b);
+        const sortedY = [...options.splitPositions.y].sort((a, b) => a - b);
+        const sortedZ = [...options.splitPositions.z].sort((a, b) => a - b);
+
+        xBoundaries = [bounds.min[0], ...sortedX.map(p => bounds.min[0] + p), bounds.max[0]];
+        yBoundaries = [bounds.min[1], ...sortedY.map(p => bounds.min[1] + p), bounds.max[1]];
+        zBoundaries = [bounds.min[2], ...sortedZ.map(p => bounds.min[2] + p), bounds.max[2]];
+
+        // Override sections to match custom boundaries
+        sections.x = xBoundaries.length - 1;
+        sections.y = yBoundaries.length - 1;
+        sections.z = zBoundaries.length - 1;
+
+        this.log(`Custom split positions: X=${sortedX.length} cuts, Y=${sortedY.length} cuts, Z=${sortedZ.length} cuts`);
+      } else {
+        // Uniform mode - build boundaries from pieceSizes
+        xBoundaries = [];
+        for (let i = 0; i <= sections.x; i++) {
+          xBoundaries.push(Math.min(bounds.min[0] + i * pieceSizes.x, bounds.max[0]));
+        }
+        yBoundaries = [];
+        for (let i = 0; i <= sections.y; i++) {
+          yBoundaries.push(Math.min(bounds.min[1] + i * pieceSizes.y, bounds.max[1]));
+        }
+        zBoundaries = [];
+        for (let i = 0; i <= sections.z; i++) {
+          zBoundaries.push(Math.min(bounds.min[2] + i * pieceSizes.z, bounds.max[2]));
+        }
+      }
+
       // Create alignment holes BEFORE cutting if enabled
       manifoldWithHoles = manifold; // Start with reference to original
 
@@ -922,7 +961,7 @@ export class ManifoldSplitter {
         // For each cut plane, create holes for each section in perpendicular axes
         // X-axis cuts (creates YZ plane cuts)
         for (let i = 1; i < sections.x; i++) {
-          const cutPosition = bounds.min[0] + i * pieceSizes.x;
+          const cutPosition = xBoundaries[i];
 
           // Create holes for each Y and Z section
           for (let y = 0; y < sections.y; y++) {
@@ -931,10 +970,10 @@ export class ManifoldSplitter {
               let holesAttempted = 0;
 
               // Section bounds for this cut (grid cell boundaries)
-              const yMin = bounds.min[1] + y * pieceSizes.y;
-              const yMax = bounds.min[1] + (y + 1) * pieceSizes.y;
-              const zMin = bounds.min[2] + z * pieceSizes.z;
-              const zMax = bounds.min[2] + (z + 1) * pieceSizes.z;
+              const yMin = yBoundaries[y];
+              const yMax = yBoundaries[y + 1];
+              const zMin = zBoundaries[z];
+              const zMax = zBoundaries[z + 1];
 
               // Find actual geometry bounds at this cut plane within this section
               console.log(`  Finding geometry bounds for X-cut ${i} section (${y}, ${z})...`);
@@ -1096,7 +1135,7 @@ export class ManifoldSplitter {
 
         // Y-axis cuts (creates XZ plane cuts)
         for (let i = 1; i < sections.y; i++) {
-          const cutPosition = bounds.min[1] + i * pieceSizes.y;
+          const cutPosition = yBoundaries[i];
 
           // Create holes for each X and Z section
           for (let x = 0; x < sections.x; x++) {
@@ -1105,10 +1144,10 @@ export class ManifoldSplitter {
               let holesAttempted = 0;
 
               // Section bounds for this cut (grid cell boundaries)
-              const xMin = bounds.min[0] + x * pieceSizes.x;
-              const xMax = bounds.min[0] + (x + 1) * pieceSizes.x;
-              const zMin = bounds.min[2] + z * pieceSizes.z;
-              const zMax = bounds.min[2] + (z + 1) * pieceSizes.z;
+              const xMin = xBoundaries[x];
+              const xMax = xBoundaries[x + 1];
+              const zMin = zBoundaries[z];
+              const zMax = zBoundaries[z + 1];
 
               // Find actual geometry bounds at this cut plane within this section
               console.log(`  Finding geometry bounds for Y-cut ${i} section (${x}, ${z})...`);
@@ -1267,7 +1306,7 @@ export class ManifoldSplitter {
 
         // Z-axis cuts (creates XY plane cuts)
         for (let i = 1; i < sections.z; i++) {
-          const cutPosition = bounds.min[2] + i * pieceSizes.z;
+          const cutPosition = zBoundaries[i];
 
           // Create holes for each X and Y section
           for (let x = 0; x < sections.x; x++) {
@@ -1276,10 +1315,10 @@ export class ManifoldSplitter {
               let holesAttempted = 0;
 
               // Section bounds for this cut (grid cell boundaries)
-              const xMin = bounds.min[0] + x * pieceSizes.x;
-              const xMax = bounds.min[0] + (x + 1) * pieceSizes.x;
-              const yMin = bounds.min[1] + y * pieceSizes.y;
-              const yMax = bounds.min[1] + (y + 1) * pieceSizes.y;
+              const xMin = xBoundaries[x];
+              const xMax = xBoundaries[x + 1];
+              const yMin = yBoundaries[y];
+              const yMax = yBoundaries[y + 1];
 
               // Find actual geometry bounds at this cut plane within this section
               console.log(`  Finding geometry bounds for Z-cut ${i} section (${x}, ${y})...`);
@@ -1444,14 +1483,14 @@ export class ManifoldSplitter {
         for (let y = 0; y < sections.y; y++) {
           for (let z = 0; z < sections.z; z++) {
             const boxMin = [
-              bounds.min[0] + x * pieceSizes.x,
-              bounds.min[1] + y * pieceSizes.y,
-              bounds.min[2] + z * pieceSizes.z
+              xBoundaries[x],
+              yBoundaries[y],
+              zBoundaries[z]
             ];
             const boxMax = [
-              Math.min(bounds.max[0], bounds.min[0] + (x + 1) * pieceSizes.x),
-              Math.min(bounds.max[1], bounds.min[1] + (y + 1) * pieceSizes.y),
-              Math.min(bounds.max[2], bounds.min[2] + (z + 1) * pieceSizes.z)
+              xBoundaries[x + 1],
+              yBoundaries[y + 1],
+              zBoundaries[z + 1]
             ];
 
             const boxSize = [

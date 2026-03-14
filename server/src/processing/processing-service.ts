@@ -10,6 +10,7 @@ export interface ProcessingOptions {
   };
   smartBoundaries?: boolean;
   balancedCutting?: boolean;
+  splitPositions?: { x: number[]; y: number[]; z: number[] };
   alignmentHoles?: {
     enabled: boolean;
     diameter: number;

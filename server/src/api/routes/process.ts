@@ -11,7 +11,7 @@ const router = express.Router();
  */
 router.post('/', async (req, res) => {
   try {
-    const { fileId, fileName, dimensions, smartBoundaries, balancedCutting, alignmentHoles } = req.body;
+    const { fileId, fileName, dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitPositions } = req.body;
 
     // Validate required fields
     if (!fileId || !fileName || !dimensions) {
@@ -20,6 +20,17 @@ router.post('/', async (req, res) => {
 
     if (!dimensions.x || !dimensions.y || !dimensions.z) {
       return res.status(400).json({ error: 'Dimensions must include x, y, and z values' });
+    }
+
+    // Validate splitPositions if provided
+    if (splitPositions) {
+      if (typeof splitPositions !== 'object' || !Array.isArray(splitPositions.x) || !Array.isArray(splitPositions.y) || !Array.isArray(splitPositions.z)) {
+        return res.status(400).json({ error: 'splitPositions must have x, y, and z arrays' });
+      }
+      const allPositions = [...splitPositions.x, ...splitPositions.y, ...splitPositions.z];
+      if (allPositions.some((p: any) => typeof p !== 'number' || !isFinite(p))) {
+        return res.status(400).json({ error: 'splitPositions must contain only finite numbers' });
+      }
     }
 
     // Create job
@@ -37,6 +48,7 @@ router.post('/', async (req, res) => {
         depth: 3,
         spacing: 'normal',
       },
+      ...(splitPositions && { splitPositions }),
     };
 
     await addProcessingJob(jobData);
