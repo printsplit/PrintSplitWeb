@@ -60,6 +60,8 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
   const [sceneReady, setSceneReady] = useState(false);
   const [viewMode, setViewMode] = useState<'original' | 'parts' | 'both'>('original');
   const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
+  const [hasDragged, setHasDragged] = useState(false);
+  const [hasCutPlanes, setHasCutPlanes] = useState(false);
 
   // Drag state refs
   const dragStateRef = useRef<DragState>({
@@ -400,6 +402,7 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
           onSplitPositionsChangeRef.current(positions);
         }
 
+        setHasDragged(true);
         ds.isDragging = false;
         ds.plane = null;
         canvas.style.cursor = '';
@@ -714,7 +717,11 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
     }
 
     // Only show grid if splitting is needed
-    if (xCuts.length === 0 && yCuts.length === 0 && zCuts.length === 0) return;
+    if (xCuts.length === 0 && yCuts.length === 0 && zCuts.length === 0) {
+      setHasCutPlanes(false);
+      return;
+    }
+    setHasCutPlanes(true);
 
     const createCutPlaneMesh = (
       axis: 'x' | 'y' | 'z',
@@ -910,6 +917,25 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
             >
               Both
             </button>
+          </div>
+        )}
+
+        {/* Drag hint */}
+        {hasCutPlanes && !hasDragged && viewMode === 'original' && (
+          <div style={{
+            position: 'absolute',
+            top: '10px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(0,0,0,0.7)',
+            padding: '6px 14px',
+            borderRadius: '6px',
+            fontSize: '0.78rem',
+            color: '#a0aec0',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          }}>
+            Drag colored planes to adjust cut positions
           </div>
         )}
 
