@@ -15,6 +15,7 @@ export interface ProcessingOptions {
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
   };
+  splitPositions?: { x: number[]; y: number[]; z: number[] };
 }
 
 export interface RepairReport {

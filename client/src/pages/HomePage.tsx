@@ -58,7 +58,9 @@ export function HomePage() {
             diameter: parsed.alignmentHoles?.diameter || 1.8,
             depth: parsed.alignmentHoles?.depth || 3,
             spacing: parsed.alignmentHoles?.spacing || 'normal'
-          }
+          },
+          splitMode: parsed.splitMode || 'uniform',
+          splitPositions: parsed.splitPositions || null
         };
       }
     } catch (error) {
@@ -70,7 +72,9 @@ export function HomePage() {
       dimensions: { x: 200, y: 200, z: 200 },
       smartBoundaries: true,
       balancedCutting: true,
-      alignmentHoles: { enabled: false, diameter: 2.0, depth: 3, spacing: 'normal' }
+      alignmentHoles: { enabled: false, diameter: 2.0, depth: 3, spacing: 'normal' },
+      splitMode: 'uniform' as const,
+      splitPositions: null
     };
   };
 
@@ -82,6 +86,8 @@ export function HomePage() {
   const [smartBoundaries, setSmartBoundaries] = useState<boolean>(settings.smartBoundaries);
   const [balancedCutting, setBalancedCutting] = useState<boolean>(settings.balancedCutting);
   const [alignmentHoles, setAlignmentHoles] = useState<AlignmentHoles>(settings.alignmentHoles);
+  const [splitMode, setSplitMode] = useState<'uniform' | 'manual'>(settings.splitMode);
+  const [splitPositions, setSplitPositions] = useState<{ x: number[]; y: number[]; z: number[] } | null>(settings.splitPositions);
   const [processing, setProcessing] = useState<ProcessingState>({
     isProcessing: false,
     progress: 0,
@@ -99,7 +105,9 @@ export function HomePage() {
         dimensions,
         smartBoundaries,
         balancedCutting,
-        alignmentHoles
+        alignmentHoles,
+        splitMode,
+        splitPositions
       };
       localStorage.setItem('printsplit-settings', JSON.stringify(settingsToSave));
     } catch (error) {
@@ -119,7 +127,7 @@ export function HomePage() {
   // Save settings whenever relevant state changes
   useEffect(() => {
     saveSettings();
-  }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles]);
+  }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitMode, splitPositions]);
 
   const handleFileSelect = async (file: File) => {
     setSelectedFile(file);
@@ -138,6 +146,19 @@ export function HomePage() {
 
   const handleDimensionChange = (newDimensions: Dimensions) => {
     setDimensions(newDimensions);
+    // Changing dimensions resets to uniform mode
+    setSplitMode('uniform');
+    setSplitPositions(null);
+  };
+
+  const handleSplitPositionsChange = (positions: { x: number[]; y: number[]; z: number[] }) => {
+    setSplitPositions(positions);
+    setSplitMode('manual');
+  };
+
+  const handleResetToUniform = () => {
+    setSplitMode('uniform');
+    setSplitPositions(null);
   };
 
   const handleDimensionBlur = () => {
@@ -180,6 +201,7 @@ export function HomePage() {
         smartBoundaries,
         balancedCutting,
         alignmentHoles,
+        ...(splitMode === 'manual' && splitPositions ? { splitPositions } : {}),
       });
 
       // Save jobId for download links
@@ -246,6 +268,8 @@ export function HomePage() {
             onBalancedCuttingChange={handleBalancedCuttingChange}
             alignmentHoles={alignmentHoles}
             onAlignmentHolesChange={handleAlignmentHolesChange}
+            splitMode={splitMode}
+            onResetToUniform={handleResetToUniform}
           />
 
           <ProcessingControls
@@ -270,6 +294,8 @@ export function HomePage() {
             file={selectedFile}
             dimensions={debouncedDimensions}
             processingResult={lastResult}
+            splitPositions={splitPositions}
+            onSplitPositionsChange={handleSplitPositionsChange}
           />
         </div>
       </main>

@@ -23,6 +23,8 @@ interface DimensionControlsProps {
   onBalancedCuttingChange: (enabled: boolean) => void;
   alignmentHoles: AlignmentHoles;
   onAlignmentHolesChange: (settings: AlignmentHoles) => void;
+  splitMode?: 'uniform' | 'manual';
+  onResetToUniform?: () => void;
 }
 
 const DimensionControls: React.FC<DimensionControlsProps> = ({
@@ -34,7 +36,9 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
   balancedCutting,
   onBalancedCuttingChange,
   alignmentHoles,
-  onAlignmentHolesChange
+  onAlignmentHolesChange,
+  splitMode,
+  onResetToUniform,
 }) => {
   // Track input values as strings to allow empty state
   const [inputValues, setInputValues] = useState({
@@ -84,7 +88,36 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
   return (
     <div className="panel-section">
       <h3>3D Printer Bed Size</h3>
-      <div className="dimension-controls">
+      {splitMode === 'manual' && (
+        <div style={{
+          background: '#2d3748',
+          border: '1px solid #4a5568',
+          borderRadius: '6px',
+          padding: '8px 12px',
+          marginBottom: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '0.8rem',
+        }}>
+          <span style={{ color: '#fbd38d' }}>Manual positions active</span>
+          <button
+            onClick={onResetToUniform}
+            style={{
+              background: '#4a5568',
+              color: '#e2e8f0',
+              border: 'none',
+              borderRadius: '4px',
+              padding: '4px 10px',
+              cursor: 'pointer',
+              fontSize: '0.75rem',
+            }}
+          >
+            Reset
+          </button>
+        </div>
+      )}
+      <div className="dimension-controls" style={{ opacity: splitMode === 'manual' ? 0.5 : 1, pointerEvents: splitMode === 'manual' ? 'none' : 'auto' }}>
         <div className="dimension-input">
           <label>X:</label>
           <input
@@ -138,12 +171,13 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
         Enter the size of each cube section (model will be split into cubes of this size)
       </div>
       
-      <div style={{ marginTop: '16px', borderTop: '1px solid #333', paddingTop: '12px' }}>
+      <div style={{ marginTop: '16px', borderTop: '1px solid #333', paddingTop: '12px', opacity: splitMode === 'manual' ? 0.5 : 1 }}>
         <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem' }}>
           <input
             type="checkbox"
             checked={smartBoundaries}
             onChange={(e) => onSmartBoundariesChange(e.target.checked)}
+            disabled={splitMode === 'manual'}
             style={{ marginRight: '8px' }}
           />
           Smart boundaries (prevent floating parts)
@@ -153,12 +187,13 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
         </div>
       </div>
 
-      <div style={{ marginTop: '12px' }}>
+      <div style={{ marginTop: '12px', opacity: splitMode === 'manual' ? 0.5 : 1 }}>
         <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem' }}>
           <input
             type="checkbox"
             checked={balancedCutting}
             onChange={(e) => onBalancedCuttingChange(e.target.checked)}
+            disabled={splitMode === 'manual'}
             style={{ marginRight: '8px' }}
           />
           Balanced cutting (avoid tiny pieces)
