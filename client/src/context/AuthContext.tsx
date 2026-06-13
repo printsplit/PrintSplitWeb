@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 
 interface AuthContextType {
   isAuthenticated: boolean;
+  isLoading: boolean;
   token: string | null;
   login: (password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
@@ -14,6 +15,9 @@ const TOKEN_KEY = 'printsplit_admin_token';
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Starts true so consumers can wait for the localStorage check before
+  // deciding whether to redirect an unauthenticated user.
+  const [isLoading, setIsLoading] = useState(true);
 
   // Check for existing token on mount
   useEffect(() => {
@@ -22,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(savedToken);
       setIsAuthenticated(true);
     }
+    setIsLoading(false);
   }, []);
 
   const login = async (password: string): Promise<{ success: boolean; error?: string }> => {
@@ -60,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, token, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, token, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

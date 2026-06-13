@@ -13,19 +13,11 @@ function App() {
     },
     {
       path: '/admin/login',
-      component: (
-        <AuthProvider>
-          <AdminLogin />
-        </AuthProvider>
-      )
+      component: <AdminLogin />
     },
     {
       path: '/admin',
-      component: (
-        <AuthProvider>
-          <AdminDashboard />
-        </AuthProvider>
-      )
+      component: <AdminDashboard />
     },
     {
       path: '*',
@@ -33,7 +25,13 @@ function App() {
     }
   ];
 
-  return <Router routes={routes} />;
+  // A single AuthProvider wraps the whole router so auth state is shared across
+  // routes (login → dashboard) instead of each route holding its own instance.
+  return (
+    <AuthProvider>
+      <Router routes={routes} />
+    </AuthProvider>
+  );
 }
 
 export default App;

@@ -1,4 +1,27 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash, timingSafeEqual } from 'crypto';
+
+/**
+ * Derive a stateless session token from the admin password.
+ * The raw password is never sent to the client; the client stores and
+ * presents this derived token instead. Changing ADMIN_TOKEN_SECRET (or the
+ * password) invalidates previously issued tokens.
+ */
+function deriveToken(password: string): string {
+  const secret = process.env.ADMIN_TOKEN_SECRET || 'printsplit-admin-token';
+  return createHash('sha256').update(`${secret}:${password}`).digest('hex');
+}
+
+/**
+ * Constant-time string comparison to avoid leaking secret length/content
+ * via response timing. Inputs are hashed first so timingSafeEqual always
+ * receives equal-length buffers.
+ */
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 /**
  * Simple authentication middleware for admin routes
@@ -30,8 +53,8 @@ export const authenticateAdmin = (
     ? authHeader.substring(7)
     : authHeader;
 
-  // Verify token matches admin password
-  if (token !== adminPassword) {
+  // Verify token matches the derived admin token (constant-time)
+  if (!safeEqual(token, deriveToken(adminPassword))) {
     res.status(403).json({ error: 'Invalid authentication token' });
     return;
   }
@@ -42,7 +65,7 @@ export const authenticateAdmin = (
 
 /**
  * Login endpoint handler
- * Validates password and returns token
+ * Validates password and returns a derived session token
  */
 export const adminLogin = (req: Request, res: Response): void => {
   const { password } = req.body;
@@ -58,15 +81,16 @@ export const adminLogin = (req: Request, res: Response): void => {
     return;
   }
 
-  if (password !== adminPassword) {
+  if (!safeEqual(password, adminPassword)) {
     res.status(403).json({ error: 'Invalid password' });
     return;
   }
 
-  // Return the token (in a real app, you'd generate a JWT)
+  // Return a derived token instead of the raw password so the credential
+  // itself never travels in the response body or gets persisted client-side.
   res.json({
     success: true,
-    token: adminPassword,
+    token: deriveToken(adminPassword),
     message: 'Login successful'
   });
 };

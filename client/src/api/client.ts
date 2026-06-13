@@ -127,26 +127,47 @@ class PrintSplitAPI {
    */
   async waitForJob(
     jobId: string,
-    onProgress?: (progress: number, status: string, message?: string) => void
+    onProgress?: (progress: number, status: string, message?: string) => void,
+    signal?: AbortSignal
   ): Promise<JobStatus['result']> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('Polling aborted', 'AbortError'));
+        return;
+      }
+
+      const cleanup = () => {
+        clearInterval(interval);
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException('Polling aborted', 'AbortError'));
+      };
+
+      signal?.addEventListener('abort', onAbort);
+
       const interval = setInterval(async () => {
         try {
           const status = await this.getJobStatus(jobId);
+
+          // The caller may have aborted while the request was in flight.
+          if (signal?.aborted) return;
 
           if (onProgress) {
             onProgress(status.progress, status.state, status.progressMessage);
           }
 
           if (status.state === 'completed') {
-            clearInterval(interval);
+            cleanup();
             resolve(status.result);
           } else if (status.state === 'failed') {
-            clearInterval(interval);
+            cleanup();
             reject(new Error(status.error || 'Job failed'));
           }
         } catch (error) {
-          clearInterval(interval);
+          cleanup();
           reject(error);
         }
       }, 1000); // Poll every second

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import FileUpload from '../components/FileUpload';
 import DimensionControls from '../components/DimensionControls';
 import STLPreview from '../components/STLPreview';
@@ -72,7 +72,7 @@ export function HomePage() {
       dimensions: { x: 200, y: 200, z: 200 },
       smartBoundaries: true,
       balancedCutting: true,
-      alignmentHoles: { enabled: false, diameter: 2.0, depth: 3, spacing: 'normal' },
+      alignmentHoles: { enabled: false, diameter: 1.8, depth: 3, spacing: 'normal' },
       splitMode: 'uniform' as const,
       splitPositions: null
     };
@@ -97,6 +97,15 @@ export function HomePage() {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [meshValidation, setMeshValidation] = useState<MeshValidation | null>(null);
   const [validating, setValidating] = useState(false);
+
+  // Controls the active job-polling loop so it can be cancelled when a new job
+  // starts or the component unmounts (prevents stale progress updates).
+  const pollAbortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight polling when the component unmounts.
+  useEffect(() => {
+    return () => pollAbortRef.current?.abort();
+  }, []);
 
   // Save settings to localStorage whenever they change
   const saveSettings = () => {
@@ -184,6 +193,12 @@ export function HomePage() {
       return;
     }
 
+    // Cancel any previous polling loop before starting a new job.
+    pollAbortRef.current?.abort();
+    const abortController = new AbortController();
+    pollAbortRef.current = abortController;
+    const { signal } = abortController;
+
     setProcessing({ isProcessing: true, progress: 0, status: 'Uploading file...' });
     setLastResult(null);
 
@@ -210,11 +225,12 @@ export function HomePage() {
       // Step 3: Wait for job completion with progress updates
       setProcessing(prev => ({ ...prev, progress: 30, status: 'Processing...' }));
       const result = await api.waitForJob(jobId, (progress, status, message) => {
+        if (signal.aborted) return;
         // Map progress from 30-100
         const mappedProgress = 30 + (progress * 0.7);
         const displayMessage = message || `Processing: ${status}`;
         setProcessing({ isProcessing: true, progress: mappedProgress, status: displayMessage });
-      });
+      }, signal);
 
       // Step 4: Set the result
       if (result) {
@@ -237,6 +253,10 @@ export function HomePage() {
         });
       }
     } catch (error) {
+      // A cancelled poll (new job started or unmount) is not a user-facing error.
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
       console.error('Processing error:', error);
       setProcessing({
         isProcessing: false,
@@ -293,6 +313,7 @@ export function HomePage() {
           <STLPreview
             file={selectedFile}
             dimensions={debouncedDimensions}
+            balancedCutting={balancedCutting}
             processingResult={lastResult}
             splitPositions={splitPositions}
             onSplitPositionsChange={handleSplitPositionsChange}

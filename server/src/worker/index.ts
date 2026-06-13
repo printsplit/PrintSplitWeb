@@ -96,6 +96,10 @@ processingQueue.process(CONCURRENCY, async (job) => {
         splitPositions: data.splitPositions,
         alignmentHoles: data.alignmentHoles,
         onProgress: updateProgress, // Pass progress callback
+        shouldCancel: async () => {
+          const latestJob = await processingQueue.getJob(data.jobId);
+          return !!latestJob?.data._cancelled;
+        },
       });
     } catch (manifoldError: any) {
       // Handle Manifold-specific errors (WASM memory issues, etc.)
@@ -138,9 +142,9 @@ processingQueue.process(CONCURRENCY, async (job) => {
         section: part.section,
       });
 
-      // Update progress every 5 parts
+      // Update progress every 5 parts (cap at 89 so the ZIP phase's 90 advances)
       if (i % 5 === 0 || i === result.parts.length - 1) {
-        const uploadPercent = 75 + ((i + 1) / result.parts.length) * 15;
+        const uploadPercent = 75 + ((i + 1) / result.parts.length) * 14;
         await updateProgress(uploadPercent, `Uploading parts: ${i + 1}/${result.parts.length}`);
       }
     }
@@ -225,54 +229,47 @@ repairQueue.process(CONCURRENCY, async (job) => {
       onProgress: updateProgress,
     });
 
-    clearTimeout(repairWatchdog);
+    // An unrecoverable repair (mesh still not manifold) is a failure — throw so
+    // Bull records the job as failed rather than completed-with-success-false.
+    if (!result.success) {
+      clearTimeout(repairWatchdog);
+      await fs.rm(workDir, { recursive: true, force: true });
+      throw new Error(result.error || 'Repair failed: mesh could not be made manifold');
+    }
 
-    if (result.success && result.wasRepaired && result.outputPath) {
+    const report = {
+      wasRepaired: result.wasRepaired,
+      originalStatus: result.report.originalStatus,
+      repairedStatus: result.report.repairedStatus,
+      originalVertices: result.report.originalVertices,
+      repairedVertices: result.report.repairedVertices,
+      originalTriangles: result.report.originalTriangles,
+      repairedTriangles: result.report.repairedTriangles,
+    };
+
+    let repairedFileUrl: string | undefined;
+    if (result.wasRepaired && result.outputPath) {
+      // Upload the repaired file. Keep the watchdog armed across the upload so a
+      // stalled storage write is surfaced rather than silently hanging.
       await updateProgress(90, 'Uploading repaired file');
       const objectName = `${data.jobId}/${outputFileName}`;
       await storage.uploadFile(result.outputPath, objectName, 'result');
-
-      const repairedFileUrl = `/api/download/${data.jobId}/${outputFileName}`;
-
-      await fs.rm(workDir, { recursive: true, force: true });
-
-      const jobResult: RepairJobResult = {
-        success: true,
-        jobId: data.jobId,
-        repairedFileUrl,
-        report: {
-          wasRepaired: result.wasRepaired,
-          originalStatus: result.report.originalStatus,
-          repairedStatus: result.report.repairedStatus,
-          originalVertices: result.report.originalVertices,
-          repairedVertices: result.report.repairedVertices,
-          originalTriangles: result.report.originalTriangles,
-          repairedTriangles: result.report.repairedTriangles,
-        },
-      };
-
-      console.log(`✅ Repair job ${data.jobId} completed!`);
-      return jobResult;
-    } else {
-      await fs.rm(workDir, { recursive: true, force: true });
-
-      const jobResult: RepairJobResult = {
-        success: result.success,
-        jobId: data.jobId,
-        report: result.wasRepaired === false && result.success ? {
-          wasRepaired: false,
-          originalStatus: result.report.originalStatus,
-          repairedStatus: result.report.repairedStatus,
-          originalVertices: result.report.originalVertices,
-          repairedVertices: result.report.repairedVertices,
-          originalTriangles: result.report.originalTriangles,
-          repairedTriangles: result.report.repairedTriangles,
-        } : undefined,
-        error: result.error,
-      };
-
-      return jobResult;
+      repairedFileUrl = `/api/download/${data.jobId}/${outputFileName}`;
     }
+    // else: mesh was already valid — success with nothing to download.
+
+    clearTimeout(repairWatchdog);
+    await fs.rm(workDir, { recursive: true, force: true });
+
+    const jobResult: RepairJobResult = {
+      success: true,
+      jobId: data.jobId,
+      ...(repairedFileUrl && { repairedFileUrl }),
+      report,
+    };
+
+    console.log(`✅ Repair job ${data.jobId} completed! (wasRepaired: ${result.wasRepaired})`);
+    return jobResult;
   } catch (error) {
     clearTimeout(repairWatchdog);
     console.error(`❌ Repair job ${data.jobId} failed:`, error);
@@ -290,7 +287,12 @@ async function createZipArchive(filePaths: string[], outputPath: string): Promis
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => resolve());
-    archive.on('error', (err) => reject(err));
+    output.on('error', (err: Error) => reject(err));
+    archive.on('error', (err: Error) => {
+      // Tear down the write stream so its file descriptor isn't leaked.
+      output.destroy();
+      reject(err);
+    });
 
     archive.pipe(output);
 

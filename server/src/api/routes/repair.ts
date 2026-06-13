@@ -2,6 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { addRepairJob } from '../../worker/queue';
 import { RepairJobData } from '../../types/job';
+import { isValidFileId } from '../validation';
 
 const router = express.Router();
 
@@ -15,6 +16,10 @@ router.post('/', async (req, res) => {
 
     if (!fileId || !fileName) {
       return res.status(400).json({ error: 'Missing required fields: fileId, fileName' });
+    }
+
+    if (!isValidFileId(fileId)) {
+      return res.status(400).json({ error: 'Invalid fileId' });
     }
 
     const jobId = uuidv4();

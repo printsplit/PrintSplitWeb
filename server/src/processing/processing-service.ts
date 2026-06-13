@@ -18,6 +18,9 @@ export interface ProcessingOptions {
     spacing?: 'sparse' | 'normal' | 'dense';
   };
   onProgress?: (percent: number, message: string) => void | Promise<void>;
+  // Returns true if the job has been cancelled; checked at coarse boundaries
+  // during the long-running split so cancellation takes effect mid-processing.
+  shouldCancel?: () => boolean | Promise<boolean>;
 }
 
 export interface ProcessingResult {
@@ -83,7 +86,10 @@ export class ProcessingService {
 
       // Try to create a simple test manifold to verify it works
       const testCube = manifoldInstance.Manifold.cube([1, 1, 1]);
-      if (testCube && testCube.status() === 'NoError') {
+      const ok = !!testCube && testCube.status() === 'NoError';
+      // Free the WASM-backed test object to avoid leaking heap on every call.
+      testCube?.delete();
+      if (ok) {
         return {
           available: true,
           path: 'manifold-3d (Node.js native)',

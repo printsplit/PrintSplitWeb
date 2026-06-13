@@ -175,7 +175,7 @@ export class MinioStorage {
       await this.client.statObject(targetBucket, objectName);
       return true;
     } catch (err: any) {
-      if (err.code === 'NotFound') {
+      if (err.code === 'NotFound' || err.code === 'NoSuchKey') {
         return false;
       }
       throw err;

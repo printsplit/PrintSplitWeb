@@ -38,6 +38,18 @@ export class ManifoldSplitter {
   private geometryBoundsCache: Map<string, { min1: number; max1: number; min2: number; max2: number } | null> = new Map();
   private jobId?: string;
   private onProgress?: (percent: number, message: string) => void | Promise<void>;
+  private shouldCancel?: () => boolean | Promise<boolean>;
+
+  /**
+   * Throw if the job has been cancelled. Called at coarse loop boundaries so
+   * a cancellation request takes effect during the long split rather than
+   * only at the start/end of processing.
+   */
+  private async checkCancelled() {
+    if (this.shouldCancel && (await this.shouldCancel())) {
+      throw new Error('Job was cancelled');
+    }
+  }
 
   /**
    * Set job ID for logging purposes
@@ -85,11 +97,20 @@ export class ManifoldSplitter {
     const buffer = await fs.readFile(filePath);
     const dataView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 
-    // Check if binary STL (starts with 80-byte header + 4-byte triangle count)
+    // Detect format. An ASCII STL begins with the token "solid"; a binary STL
+    // has an 80-byte header + 4-byte triangle count + 50 bytes per triangle.
+    // Relying on the size formula alone is unreliable: a binary file with
+    // trailing bytes gets mis-parsed as ASCII (yielding an empty mesh), and an
+    // ASCII file can coincidentally satisfy the formula. Combine both signals.
     const triangleCount = dataView.getUint32(80, true);
     const expectedSize = 80 + 4 + (triangleCount * 50);
+    const startsWithSolid =
+      buffer.length >= 5 && buffer.slice(0, 5).toString('ascii').toLowerCase() === 'solid';
 
-    if (buffer.length === expectedSize) {
+    // Treat as binary when the size matches the formula, or when it doesn't
+    // start with "solid" (binary headers may coincidentally start with it, so
+    // the size match takes precedence).
+    if (buffer.length === expectedSize || !startsWithSolid) {
       return this.parseBinarySTL(dataView);
     } else {
       return this.parseASCIISTL(buffer.toString('utf8'));
@@ -778,8 +799,9 @@ export class ManifoldSplitter {
    * Split STL using manifold-3d
    */
   async splitSTL(options: ProcessingOptions): Promise<ProcessingResult> {
-    // Store progress callback and clear cache
+    // Store progress + cancellation callbacks and clear cache
     this.onProgress = options.onProgress;
+    this.shouldCancel = options.shouldCancel;
     this.geometryBoundsCache.clear();
 
     this.log('Starting Manifold STL splitting...');
@@ -961,6 +983,7 @@ export class ManifoldSplitter {
         // For each cut plane, create holes for each section in perpendicular axes
         // X-axis cuts (creates YZ plane cuts)
         for (let i = 1; i < sections.x; i++) {
+          await this.checkCancelled();
           const cutPosition = xBoundaries[i];
 
           // Create holes for each Y and Z section
@@ -1135,6 +1158,7 @@ export class ManifoldSplitter {
 
         // Y-axis cuts (creates XZ plane cuts)
         for (let i = 1; i < sections.y; i++) {
+          await this.checkCancelled();
           const cutPosition = yBoundaries[i];
 
           // Create holes for each X and Z section
@@ -1306,6 +1330,7 @@ export class ManifoldSplitter {
 
         // Z-axis cuts (creates XY plane cuts)
         for (let i = 1; i < sections.z; i++) {
+          await this.checkCancelled();
           const cutPosition = zBoundaries[i];
 
           // Create holes for each X and Y section
@@ -1480,6 +1505,7 @@ export class ManifoldSplitter {
 
       // Split the model using balanced piece sizes
       for (let x = 0; x < sections.x; x++) {
+        await this.checkCancelled();
         for (let y = 0; y < sections.y; y++) {
           for (let z = 0; z < sections.z; z++) {
             const boxMin = [

@@ -51,14 +51,15 @@ export function AdminDashboard() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const { isAuthenticated, token, logout } = useAuth();
+  const { isAuthenticated, isLoading, token, logout } = useAuth();
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated — but only after the auth state has been
+  // restored from localStorage, otherwise a logged-in user is bounced on load.
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isLoading && !isAuthenticated) {
       navigate('/admin/login');
     }
-  }, [isAuthenticated]);
+  }, [isLoading, isAuthenticated]);
 
   // Fetch stats and health
   const fetchStats = async () => {

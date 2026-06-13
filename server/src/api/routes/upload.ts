@@ -3,6 +3,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { getStorageClient } from '../../storage/minio-client';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 
 const router = express.Router();
 const storage = getStorageClient();
@@ -46,21 +47,21 @@ const upload = multer({
  * Upload STL file
  */
 router.post('/', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
 
+  const tempPath = req.file.path;
+
+  try {
     const fileId = uuidv4();
-    const originalName = req.file.originalname;
+    // Strip any path components from the browser-supplied filename so it
+    // cannot traverse outside the fileId prefix in the storage bucket.
+    const originalName = path.basename(req.file.originalname);
     const objectName = `${fileId}/${originalName}`;
 
     // Upload to MinIO
-    await storage.uploadFile(req.file.path, objectName, 'upload');
-
-    // Clean up temp file
-    const fs = require('fs/promises');
-    await fs.unlink(req.file.path);
+    await storage.uploadFile(tempPath, objectName, 'upload');
 
     res.json({
       success: true,
@@ -71,6 +72,9 @@ router.post('/', upload.single('file'), async (req, res) => {
   } catch (error: any) {
     console.error('Upload error:', error);
     res.status(500).json({ error: error.message || 'Upload failed' });
+  } finally {
+    // Always clean up the multer temp file, even if the upload failed.
+    await fs.unlink(tempPath).catch(() => {});
   }
 });
 

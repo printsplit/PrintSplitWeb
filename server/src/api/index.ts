@@ -23,8 +23,12 @@ app.use(helmet());
 app.use(compression());
 
 // CORS configuration
+// A wildcard origin ('*') combined with credentials is rejected by browsers,
+// so when no explicit allow-list is configured we reflect the request origin
+// (origin: true), which is valid alongside credentials.
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean);
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : true,
   credentials: true,
 }));
 
@@ -42,16 +46,29 @@ if (rateLimitEnabled) {
     windowMs: rateLimitWindowMinutes * 60 * 1000,
     max: rateLimitMax,
     message: 'Too many requests from this IP, please try again later.',
-    skip: (req) => req.path.startsWith('/api/admin'), // Skip rate limiting for admin routes
+    // Exempt authenticated admin routes (e.g. dashboard polling) from the
+    // general limit, but NOT the login endpoint — it must stay rate-limited.
+    // Use originalUrl because req.path is stripped of the mount prefix here.
+    skip: (req) =>
+      req.originalUrl.startsWith('/api/admin') &&
+      !req.originalUrl.startsWith('/api/admin/login'),
+  });
+
+  // Stricter dedicated limiter for the login endpoint to throttle brute force.
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '10'),
+    message: 'Too many login attempts, please try again later.',
   });
 
   console.log(`⚡ Rate limiting: ${rateLimitMax} requests per ${rateLimitWindowMinutes} minutes`);
+  app.use('/api/admin/login', loginLimiter);
   app.use('/api/', limiter);
 } else {
   console.log('⚠️  Rate limiting: DISABLED');
 }
 
-// API Routes (admin first to skip rate limiting)
+// API Routes
 app.use('/api/admin', adminRouter);
 app.use('/api/health', healthRouter);
 app.use('/api/upload', uploadRouter);
