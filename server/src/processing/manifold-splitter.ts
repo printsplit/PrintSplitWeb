@@ -2,6 +2,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ProcessingOptions, ProcessingResult } from './processing-service';
 
+// Minimum volume (mm³) for a cut component to be emitted as its own part.
+// Anything smaller is a floating cut artifact, not a printable chunk.
+const MIN_PART_VOLUME = 1.0;
+
 // Dynamic import types
 type ManifoldToplevel = {
   Manifold: any;
@@ -798,6 +802,32 @@ export class ManifoldSplitter {
   /**
    * Split STL using manifold-3d
    */
+  /**
+   * Convert a manifold-3d mesh into our STLMesh format, computing bounds.
+   * Returns null for an empty mesh.
+   */
+  private meshToSTL(partMesh: { vertProperties: Float32Array; triVerts: Uint32Array }): STLMesh | null {
+    const vertices = partMesh.vertProperties;
+    if (!vertices || vertices.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+      minX = Math.min(minX, vertices[i]);
+      maxX = Math.max(maxX, vertices[i]);
+      minY = Math.min(minY, vertices[i + 1]);
+      maxY = Math.max(maxY, vertices[i + 1]);
+      minZ = Math.min(minZ, vertices[i + 2]);
+      maxZ = Math.max(maxZ, vertices[i + 2]);
+    }
+
+    return {
+      vertices,
+      triangles: partMesh.triVerts,
+      bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    };
+  }
+
   async splitSTL(options: ProcessingOptions): Promise<ProcessingResult> {
     // Store progress + cancellation callbacks and clear cache
     this.onProgress = options.onProgress;
@@ -1539,41 +1569,40 @@ export class ManifoldSplitter {
             cuttingBox.delete();
 
             if (partManifold.status() === 'NoError' && partManifold.volume() > 0.001) {
-              // Convert back to mesh
-              const partMesh = partManifold.getMesh();
+              // A single grid cell can intersect a non-convex model in several
+              // physically separate places (e.g. two arms of a figurine), which
+              // would otherwise be fused into one STL as "floating pieces".
+              // Decompose into topologically disconnected components so each
+              // printable chunk is its own connected solid, and drop tiny cut
+              // artifacts that aren't worth printing.
+              const components = partManifold
+                .decompose()
+                .map((c: any) => ({ c, vol: c.volume() }))
+                .sort((a: { vol: number }, b: { vol: number }) => b.vol - a.vol);
 
-              if (partMesh.vertProperties.length > 0) {
-                // Convert manifold mesh to our STL format - will compute bounds properly below
-                const stlMesh: STLMesh = {
-                  vertices: partMesh.vertProperties,
-                  triangles: partMesh.triVerts,
-                  bounds: {
-                    min: [0, 0, 0],
-                    max: [0, 0, 0]
+              const keep = components.filter((comp: { vol: number }) => comp.vol >= MIN_PART_VOLUME);
+              const multi = keep.length > 1;
+
+              if (keep.length === 0) {
+                console.log(`⚠ Skipping part ${x + 1}_${y + 1}_${z + 1}: only sub-${MIN_PART_VOLUME}mm³ fragments`);
+              }
+
+              let emitted = 0;
+              for (const comp of components) {
+                if (comp.vol < MIN_PART_VOLUME) {
+                  if (comp.vol > 0.001) {
+                    console.log(`⚠ Dropping floating fragment in ${x + 1}_${y + 1}_${z + 1} (${comp.vol.toFixed(3)} mm³)`);
                   }
-                };
-
-                // Update bounds properly
-                const vertices = partMesh.vertProperties;
-                let minX = Infinity, minY = Infinity, minZ = Infinity;
-                let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-                for (let i = 0; i < vertices.length; i += 3) {
-                  minX = Math.min(minX, vertices[i]);
-                  maxX = Math.max(maxX, vertices[i]);
-                  minY = Math.min(minY, vertices[i + 1]);
-                  maxY = Math.max(maxY, vertices[i + 1]);
-                  minZ = Math.min(minZ, vertices[i + 2]);
-                  maxZ = Math.max(maxZ, vertices[i + 2]);
+                  continue;
                 }
 
-                stlMesh.bounds = {
-                  min: [minX, minY, minZ],
-                  max: [maxX, maxY, maxZ]
-                };
+                const stlMesh = this.meshToSTL(comp.c.getMesh());
+                if (!stlMesh) continue;
 
-                // Write to file
-                const partName = `part_${x + 1}_${y + 1}_${z + 1}.stl`;
+                // Keep the legacy name for clean single-chunk cells; suffix only
+                // when a cell legitimately yields multiple separate chunks.
+                const suffix = multi ? `_${emitted + 1}` : '';
+                const partName = `part_${x + 1}_${y + 1}_${z + 1}${suffix}.stl`;
                 const partPath = path.join(options.outputDir, partName);
 
                 await this.writeSTLFile(stlMesh, partPath);
@@ -1584,10 +1613,12 @@ export class ManifoldSplitter {
                   section: [x + 1, y + 1, z + 1]
                 });
 
-                console.log(`✓ Created part: ${partName} (${partMesh.vertProperties.length / 3} vertices)`);
+                console.log(`✓ Created part: ${partName} (${stlMesh.vertices.length / 3} vertices, ${comp.vol.toFixed(1)} mm³)`);
+                emitted++;
               }
 
-              // Clean up part manifold (Mesh objects don't need .delete())
+              // Clean up all component manifolds and the cell manifold
+              for (const comp of components) comp.c.delete();
               partManifold.delete();
             } else {
               console.log(`⚠ Skipping empty part ${x + 1}_${y + 1}_${z + 1}`);
