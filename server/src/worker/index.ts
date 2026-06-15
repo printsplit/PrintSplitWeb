@@ -91,7 +91,6 @@ processingQueue.process(CONCURRENCY, async (job) => {
         inputPath,
         outputDir,
         dimensions: data.dimensions,
-        smartBoundaries: data.smartBoundaries,
         balancedCutting: data.balancedCutting,
         splitPositions: data.splitPositions,
         alignmentHoles: data.alignmentHoles,

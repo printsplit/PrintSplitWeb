@@ -12,7 +12,7 @@ const router = express.Router();
  */
 router.post('/', async (req, res) => {
   try {
-    const { fileId, fileName, dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitPositions } = req.body;
+    const { fileId, fileName, dimensions, balancedCutting, alignmentHoles, splitPositions } = req.body;
 
     // Validate required fields
     if (!fileId || !fileName || !dimensions) {
@@ -45,7 +45,6 @@ router.post('/', async (req, res) => {
       fileId,
       fileName,
       dimensions,
-      smartBoundaries: smartBoundaries !== undefined ? smartBoundaries : true,
       balancedCutting: balancedCutting !== undefined ? balancedCutting : true,
       alignmentHoles: alignmentHoles || {
         enabled: false,

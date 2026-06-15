@@ -8,7 +8,6 @@ export interface ProcessingOptions {
     y: number;
     z: number;
   };
-  smartBoundaries?: boolean;
   balancedCutting?: boolean;
   splitPositions?: { x: number[]; y: number[]; z: number[] };
   alignmentHoles?: {
@@ -16,6 +15,7 @@ export interface ProcessingOptions {
     diameter: number;
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
+    adaptivePlacement?: boolean;
   };
   onProgress?: (percent: number, message: string) => void | Promise<void>;
   // Returns true if the job has been cancelled; checked at coarse boundaries

@@ -39,13 +39,18 @@ app.use(express.urlencoded({ extended: true }));
 // Rate limiting - skip admin routes (they have auth protection)
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false'; // Default: enabled
 const rateLimitWindowMinutes = parseInt(process.env.RATE_LIMIT_WINDOW_MINUTES || '15');
-const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '200');
+// Long jobs are polled by several components at once (job status, queue
+// position, processing state), so the default headroom must cover a full job's
+// worth of polls plus normal browsing.
+const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000');
 
 if (rateLimitEnabled) {
   const limiter = rateLimit({
     windowMs: rateLimitWindowMinutes * 60 * 1000,
     max: rateLimitMax,
-    message: 'Too many requests from this IP, please try again later.',
+    // Respond with JSON so clients that parse the body (response.json()) don't
+    // choke on a plain-text 429.
+    message: { error: 'Too many requests from this IP, please try again later.' },
     // Exempt authenticated admin routes (e.g. dashboard polling) from the
     // general limit, but NOT the login endpoint — it must stay rate-limited.
     // Use originalUrl because req.path is stripped of the mount prefix here.
@@ -58,7 +63,7 @@ if (rateLimitEnabled) {
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '10'),
-    message: 'Too many login attempts, please try again later.',
+    message: { error: 'Too many login attempts, please try again later.' },
   });
 
   console.log(`⚡ Rate limiting: ${rateLimitMax} requests per ${rateLimitWindowMinutes} minutes`);

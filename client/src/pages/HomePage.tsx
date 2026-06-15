@@ -18,6 +18,7 @@ interface AlignmentHoles {
   diameter: number;
   depth: number;
   spacing: 'sparse' | 'normal' | 'dense';
+  adaptivePlacement: boolean;
 }
 
 interface ProcessingState {
@@ -51,13 +52,13 @@ export function HomePage() {
         const parsed = JSON.parse(savedSettings);
         return {
           dimensions: parsed.dimensions || { x: 200, y: 200, z: 200 },
-          smartBoundaries: parsed.smartBoundaries !== undefined ? parsed.smartBoundaries : true,
           balancedCutting: parsed.balancedCutting !== undefined ? parsed.balancedCutting : true,
           alignmentHoles: {
             enabled: parsed.alignmentHoles?.enabled || false,
             diameter: parsed.alignmentHoles?.diameter || 1.8,
             depth: parsed.alignmentHoles?.depth || 3,
-            spacing: parsed.alignmentHoles?.spacing || 'normal'
+            spacing: parsed.alignmentHoles?.spacing || 'normal',
+            adaptivePlacement: parsed.alignmentHoles?.adaptivePlacement || false
           },
           splitMode: parsed.splitMode || 'uniform',
           splitPositions: parsed.splitPositions || null
@@ -70,9 +71,8 @@ export function HomePage() {
     // Return defaults if loading fails
     return {
       dimensions: { x: 200, y: 200, z: 200 },
-      smartBoundaries: true,
       balancedCutting: true,
-      alignmentHoles: { enabled: false, diameter: 1.8, depth: 3, spacing: 'normal' },
+      alignmentHoles: { enabled: false, diameter: 1.8, depth: 3, spacing: 'normal', adaptivePlacement: false },
       splitMode: 'uniform' as const,
       splitPositions: null
     };
@@ -83,7 +83,6 @@ export function HomePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dimensions, setDimensions] = useState<Dimensions>(settings.dimensions);
   const [debouncedDimensions, setDebouncedDimensions] = useState<Dimensions>(settings.dimensions);
-  const [smartBoundaries, setSmartBoundaries] = useState<boolean>(settings.smartBoundaries);
   const [balancedCutting, setBalancedCutting] = useState<boolean>(settings.balancedCutting);
   const [alignmentHoles, setAlignmentHoles] = useState<AlignmentHoles>(settings.alignmentHoles);
   const [splitMode, setSplitMode] = useState<'uniform' | 'manual'>(settings.splitMode);
@@ -112,7 +111,6 @@ export function HomePage() {
     try {
       const settingsToSave = {
         dimensions,
-        smartBoundaries,
         balancedCutting,
         alignmentHoles,
         splitMode,
@@ -136,7 +134,7 @@ export function HomePage() {
   // Save settings whenever relevant state changes
   useEffect(() => {
     saveSettings();
-  }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitMode, splitPositions]);
+  }, [dimensions, balancedCutting, alignmentHoles, splitMode, splitPositions]);
 
   const handleFileSelect = async (file: File) => {
     setSelectedFile(file);
@@ -175,10 +173,6 @@ export function HomePage() {
     setDebouncedDimensions(dimensions);
   };
 
-  const handleSmartBoundariesChange = (enabled: boolean) => {
-    setSmartBoundaries(enabled);
-  };
-
   const handleBalancedCuttingChange = (enabled: boolean) => {
     setBalancedCutting(enabled);
   };
@@ -213,7 +207,6 @@ export function HomePage() {
         fileId,
         fileName,
         dimensions,
-        smartBoundaries,
         balancedCutting,
         alignmentHoles,
         ...(splitMode === 'manual' && splitPositions ? { splitPositions } : {}),
@@ -282,8 +275,6 @@ export function HomePage() {
             dimensions={dimensions}
             onChange={handleDimensionChange}
             onBlur={handleDimensionBlur}
-            smartBoundaries={smartBoundaries}
-            onSmartBoundariesChange={handleSmartBoundariesChange}
             balancedCutting={balancedCutting}
             onBalancedCuttingChange={handleBalancedCuttingChange}
             alignmentHoles={alignmentHoles}

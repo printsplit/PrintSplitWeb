@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ProcessingOptions, ProcessingResult } from './processing-service';
+import { coverRegion, makeRng } from './geometry/polygon-utils';
 
 // Minimum volume (mm³) for a cut component to be emitted as its own part.
 // Anything smaller is a floating cut artifact, not a printable chunk.
@@ -10,6 +11,7 @@ const MIN_PART_VOLUME = 1.0;
 type ManifoldToplevel = {
   Manifold: any;
   Mesh: any;
+  CrossSection: any;
   setup: () => void;
 };
 
@@ -370,6 +372,61 @@ export class ManifoldSplitter {
   }
 
   /**
+   * FAST placement: anchor dowel-hole candidates to the cross-section's
+   * bounding box (corners + center, plus edge midpoints and 1/3 points for
+   * denser modes). Cheap, but candidates that fall outside a non-rectangular
+   * cross-section get rejected downstream, so irregular faces lose most holes.
+   * Returns positions in the cut plane's two perpendicular axes (c1, c2).
+   */
+  private gridHolePositions(
+    bounds: { min1: number; max1: number; min2: number; max2: number },
+    spacing: 'sparse' | 'normal' | 'dense',
+    edgeInset: number
+  ): Array<{ c1: number; c2: number; label: string }> {
+    const positions: Array<{ c1: number; c2: number; label: string }> = [];
+    const width = bounds.max1 - bounds.min1;
+    const height = bounds.max2 - bounds.min2;
+
+    if (width < edgeInset * 2 || height < edgeInset * 2) return positions;
+
+    const c1 = (bounds.min1 + bounds.max1) / 2;
+    const c2 = (bounds.min2 + bounds.max2) / 2;
+
+    // Always: 4 corners + center (sparse minimum)
+    positions.push(
+      { c1: bounds.min1 + edgeInset, c2: bounds.min2 + edgeInset, label: 'corner-BL' },
+      { c1: bounds.min1 + edgeInset, c2: bounds.max2 - edgeInset, label: 'corner-TL' },
+      { c1: bounds.max1 - edgeInset, c2: bounds.min2 + edgeInset, label: 'corner-BR' },
+      { c1: bounds.max1 - edgeInset, c2: bounds.max2 - edgeInset, label: 'corner-TR' },
+      { c1, c2, label: 'center' }
+    );
+
+    // Edge midpoints for normal/dense (if large enough)
+    if (spacing !== 'sparse' && width >= edgeInset * 4 && height >= edgeInset * 4) {
+      positions.push(
+        { c1, c2: bounds.min2 + edgeInset, label: 'mid-bottom' },
+        { c1, c2: bounds.max2 - edgeInset, label: 'mid-top' },
+        { c1: bounds.min1 + edgeInset, c2, label: 'mid-left' },
+        { c1: bounds.max1 - edgeInset, c2, label: 'mid-right' }
+      );
+
+      // 1/3 points for dense
+      if (spacing === 'dense') {
+        const oneThird1 = bounds.min1 + width / 3;
+        const twoThird1 = bounds.min1 + (2 * width) / 3;
+        positions.push(
+          { c1: oneThird1, c2: bounds.min2 + edgeInset, label: '1/3-bottom-left' },
+          { c1: twoThird1, c2: bounds.min2 + edgeInset, label: '1/3-bottom-right' },
+          { c1: oneThird1, c2: bounds.max2 - edgeInset, label: '1/3-top-left' },
+          { c1: twoThird1, c2: bounds.max2 - edgeInset, label: '1/3-top-right' }
+        );
+      }
+    }
+
+    return positions;
+  }
+
+  /**
    * Binary search to find the minimum bound where geometry starts
    */
   private binarySearchMin(
@@ -508,6 +565,166 @@ export class ManifoldSplitter {
       min2: min2,
       max2: max2 + sampleSize
     };
+  }
+
+  /**
+   * Cross-section of the model at a cut plane, as a manifold CrossSection in a
+   * native 2D frame, plus mappings to/from the face (c1,c2) coordinates used by
+   * the hole loops. `slice` only cuts at Z, so X/Y cuts rotate the cut axis to
+   * Z first; the returned mappings undo that for points. Caller must delete the
+   * returned `section`.
+   *
+   * Face coordinate convention: x-cut (c1,c2)=(y,z); y-cut (x,z); z-cut (x,y).
+   * IMPORTANT: toFace and toNative MUST stay exact inverses of each other.
+   *
+   * CONFIRMED MAPPING (validated against findGeometryBoundsAtCutPlane and the
+   * model's true face extents on helmet.stl, all three axes; round-trip OK):
+   *   z-cut: identity. native (n0,n1) = face (x,y); slice(cutPosition).
+   *   x-cut: rotate [0, 90, 0]; slice(-cutPosition).
+   *          native (n0,n1) = (z, y) -> face (c1,c2)=(y,z) via toFace=[n1,n0].
+   *   y-cut: rotate [-90, 0, 0]; slice(-cutPosition).
+   *          native (n0,n1) = (x, z) -> face (c1,c2)=(x,z) via toFace=[n0,n1].
+   * Slice c1/c2 extents matched the model's (y,z)/(x,z)/(x,y) extents within
+   * ~1.6mm, with correct sign and axis order. No sign/order changes were needed.
+   */
+  private sliceCrossSection(
+    manifold: any,
+    Manifold: any,
+    CrossSection: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+  ): {
+    section: any;
+    toFace: (n: [number, number]) => [number, number];
+    toNative: (c1: number, c2: number) => [number, number];
+  } {
+    if (axis === 'z') {
+      return {
+        section: manifold.slice(cutPosition),
+        toFace: (n) => [n[0], n[1]],
+        toNative: (c1, c2) => [c1, c2],
+      };
+    }
+    if (axis === 'x') {
+      // Rotate +90° about Y so the cut axis (x) maps onto z, then slice.
+      const rot = manifold.rotate([0, 90, 0]);
+      const section = rot.slice(-cutPosition);
+      rot.delete();
+      return {
+        section,
+        toFace: (n) => [n[1], n[0]],
+        toNative: (c1, c2) => [c2, c1],
+      };
+    }
+    // axis === 'y': rotate -90° about X so y maps onto z, then slice.
+    const rot = manifold.rotate([-90, 0, 0]);
+    const section = rot.slice(-cutPosition);
+    rot.delete();
+    return {
+      section,
+      toFace: (n) => [n[0], n[1]],
+      toNative: (c1, c2) => [c1, c2],
+    };
+  }
+
+  /**
+   * Contour-driven hole candidates for one cut plane × section. Slices the model
+   * at the cut, clips to the section rectangle, erodes by the hole radius so a
+   * dowel fits laterally by construction, splits into connected pieces, and
+   * Poisson-disk fills each piece at spacing S. Returns face (c1,c2) points.
+   *
+   * If eroding by holeRadius empties the core (wall thinner than the dowel), the
+   * radius is shrunk and retried; the radius actually used is returned so the
+   * caller can size the dowel to match.
+   */
+  private contourHolePositions(
+    manifold: any,
+    Manifold: any,
+    CrossSection: any,
+    cutPosition: number,
+    axis: 'x' | 'y' | 'z',
+    bounds: { min1: number; max1: number; min2: number; max2: number },
+    spacing: 'sparse' | 'normal' | 'dense',
+    holeRadius: number,
+  ): { points: Array<{ c1: number; c2: number; label: string }>; radius: number } {
+    const S = spacing === 'sparse' ? 14 : spacing === 'normal' ? 10 : 7;
+    const perFaceCap = spacing === 'dense' ? 60 : 40;
+
+    const { section, toFace, toNative } = this.sliceCrossSection(
+      manifold, Manifold, CrossSection, cutPosition, axis);
+
+    // Section rectangle in the native frame (mapping is axis-aligned, so map the
+    // four corners and take min/max).
+    const corners = [
+      toNative(bounds.min1, bounds.min2), toNative(bounds.min1, bounds.max2),
+      toNative(bounds.max1, bounds.min2), toNative(bounds.max1, bounds.max2),
+    ];
+    const nminX = Math.min(...corners.map(c => c[0])), nmaxX = Math.max(...corners.map(c => c[0]));
+    const nminY = Math.min(...corners.map(c => c[1])), nmaxY = Math.max(...corners.map(c => c[1]));
+    const rectW = nmaxX - nminX, rectH = nmaxY - nminY;
+    const rect = CrossSection.square([rectW, rectH], false).translate([nminX, nminY]);
+
+    const clipped = section.intersect(rect);
+    section.delete();
+    rect.delete();
+
+    // Erode by radius; shrink radius if the wall is too thin to fit the dowel.
+    let radius = holeRadius;
+    const floor = holeRadius * 0.45;
+    let core: any = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const c = clipped.offset(-radius, 'Round').simplify();
+      if (c.area() > 1e-6) { core = c; break; }
+      c.delete();
+      if (radius <= floor) break;
+      radius = Math.max(floor, radius * 0.7);
+    }
+    clipped.delete();
+
+    if (!core) {
+      if (process.env.HOLE_DIAG) {
+        console.error(`HOLEDIAG_THINWALL axis=${axis} cut=${cutPosition.toFixed(1)} — wall thinner than dowel, skipped`);
+      }
+      return { points: [], radius };
+    }
+
+    // Sample each connected piece so disconnected ribbons all get covered.
+    const pieces: any[] = core.decompose();
+    const toSample = pieces.length > 0 ? pieces : [core];
+    const out: Array<{ c1: number; c2: number; label: string }> = [];
+    let li = 0;
+    for (const piece of toSample) {
+      const polys = piece.toPolygons() as Array<Array<[number, number]>>;
+      if (polys.length) {
+        let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+        for (const poly of polys) for (const v of poly) {
+          mnx = Math.min(mnx, v[0]); mxx = Math.max(mxx, v[0]);
+          mny = Math.min(mny, v[1]); mxy = Math.max(mxy, v[1]);
+        }
+        const pts = coverRegion(polys, S, { minX: mnx, minY: mny, maxX: mxx, maxY: mxy }, makeRng(1 + li));
+        for (const p of pts) {
+          const [c1, c2] = toFace(p);
+          out.push({ c1, c2, label: `c${li++}` });
+        }
+      }
+      if (piece !== core) piece.delete();
+    }
+    core.delete();
+
+    // Even spread already; if over the cap, keep a uniform stride subset.
+    let points = out;
+    if (out.length > perFaceCap) {
+      const stride = out.length / perFaceCap;
+      points = Array.from({ length: perFaceCap }, (_, i) => out[Math.floor(i * stride)]);
+      if (process.env.HOLE_DIAG) {
+        console.error(`HOLEDIAG_CAP axis=${axis} cut=${cutPosition.toFixed(1)} ${out.length}->${perFaceCap}`);
+      }
+    }
+    if (process.env.HOLE_DIAG) {
+      console.error(`HOLEDIAG_FACE axis=${axis} cut=${cutPosition.toFixed(1)} span1=${(bounds.max1 - bounds.min1).toFixed(1)} span2=${(bounds.max2 - bounds.min2).toFixed(1)} S=${S} candidates=${points.length} radius=${radius.toFixed(2)}`);
+      points.forEach((p, i) => console.error(`HOLEDIAG_CAND axis=${axis} cut=${cutPosition.toFixed(1)} idx=${i} c1=${p.c1.toFixed(1)} c2=${p.c2.toFixed(1)}`));
+    }
+    return { points, radius };
   }
 
   /**
@@ -845,7 +1062,7 @@ export class ManifoldSplitter {
     try {
       // Initialize manifold module
       const manifoldModule = await this.initManifold();
-      const { Manifold } = manifoldModule;
+      const { Manifold, CrossSection } = manifoldModule;
 
       // Parse input STL
       await this.reportProgress(27, `Parsing STL file: ${path.basename(options.inputPath)}`);
@@ -987,19 +1204,16 @@ export class ManifoldSplitter {
         const holeDepth = options.alignmentHoles.depth || 3;
         const totalDepth = holeDepth * 2;
         const spacing = options.alignmentHoles.spacing || 'normal';
+        // Intensive material-following placement vs. the fast bounding-box grid.
+        const useAdaptiveHoles = options.alignmentHoles.adaptivePlacement === true;
 
         // Strategic hole placement: corners + center + midpoints
         const minVolumeRatio = 0.8; // Require 80% of expected volume to be removed
         const edgeInset = holeRadius * 2.5; // Distance from edges for hole placement
-
-        // Calculate expected volume for a full cylinder hole
-        const expectedVolume = Math.PI * holeRadius * holeRadius * totalDepth;
-
         const spacingDesc = spacing === 'sparse' ? 'corners + center' :
                            spacing === 'normal' ? 'corners + center + midpoints' :
                            'corners + center + midpoints + 1/3 points';
         this.log(`Strategic hole placement (${spacing}): ${spacingDesc}`);
-        this.log(`Expected volume per hole: ${expectedVolume.toFixed(2)} mm³`);
         this.log(`Quality thresholds: volume ≥${minVolumeRatio*100}%, edge inset ${edgeInset.toFixed(1)}mm, depth ratio ≥60%`);
 
         // Calculate total cuts for progress tracking
@@ -1039,64 +1253,40 @@ export class ManifoldSplitter {
                 [zMin, zMax]
               );
 
-              if (!geometryBounds) {
+              // Grid mode needs material bounds; contour mode does not (it reads the
+              // slice directly), so only grid mode skips an empty section here.
+              if (!geometryBounds && !useAdaptiveHoles) {
                 console.log(`  X-axis section (${i}, ${y}, ${z}): No geometry found at cut plane`);
                 continue;
               }
 
-              // Use actual geometry bounds for hole placement
-              const actualYMin = geometryBounds.min1;
-              const actualYMax = geometryBounds.max1;
-              const actualZMin = geometryBounds.min2;
-              const actualZMax = geometryBounds.max2;
-
-              const sectionWidth = actualYMax - actualYMin;
-              const sectionHeight = actualZMax - actualZMin;
+              // Geometry bounds for grid mode; contour mode falls back to the cell
+              // bounds since findGeometryBoundsAtCutPlane is unreliable on hollow shells.
+              const actualYMin = geometryBounds?.min1 ?? yMin;
+              const actualYMax = geometryBounds?.max1 ?? yMax;
+              const actualZMin = geometryBounds?.min2 ?? zMin;
+              const actualZMax = geometryBounds?.max2 ?? zMax;
 
               console.log(`  Actual geometry at cut: Y[${actualYMin.toFixed(1)}, ${actualYMax.toFixed(1)}] Z[${actualZMin.toFixed(1)}, ${actualZMax.toFixed(1)}]`);
 
-              // Generate strategic hole positions based on spacing setting
-              const strategicPositions: Array<{y: number, z: number, label: string}> = [];
-
-              // Check if section is large enough for holes
-              if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerY = (actualYMin + actualYMax) / 2;
-                const centerZ = (actualZMin + actualZMax) / 2;
-
-                // Always add 4 corners + center (sparse mode minimum)
-                strategicPositions.push(
-                  { y: actualYMin + edgeInset, z: actualZMin + edgeInset, label: 'corner-BL' },
-                  { y: actualYMin + edgeInset, z: actualZMax - edgeInset, label: 'corner-TL' },
-                  { y: actualYMax - edgeInset, z: actualZMin + edgeInset, label: 'corner-BR' },
-                  { y: actualYMax - edgeInset, z: actualZMax - edgeInset, label: 'corner-TR' },
-                  { y: centerY, z: centerZ, label: 'center' }
-                );
-
-                // Add edge midpoints for normal and dense modes (if section large enough)
-                if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
-                  strategicPositions.push(
-                    { y: centerY, z: actualZMin + edgeInset, label: 'mid-bottom' },
-                    { y: centerY, z: actualZMax - edgeInset, label: 'mid-top' },
-                    { y: actualYMin + edgeInset, z: centerZ, label: 'mid-left' },
-                    { y: actualYMax - edgeInset, z: centerZ, label: 'mid-right' }
-                  );
-
-                  // Add 1/3 points for dense mode
-                  if (spacing === 'dense') {
-                    const oneThirdY = actualYMin + (actualYMax - actualYMin) / 3;
-                    const twoThirdY = actualYMin + 2 * (actualYMax - actualYMin) / 3;
-                    const oneThirdZ = actualZMin + (actualZMax - actualZMin) / 3;
-                    const twoThirdZ = actualZMin + 2 * (actualZMax - actualZMin) / 3;
-
-                    strategicPositions.push(
-                      { y: oneThirdY, z: actualZMin + edgeInset, label: '1/3-bottom-left' },
-                      { y: twoThirdY, z: actualZMin + edgeInset, label: '1/3-bottom-right' },
-                      { y: oneThirdY, z: actualZMax - edgeInset, label: '1/3-top-left' },
-                      { y: twoThirdY, z: actualZMax - edgeInset, label: '1/3-top-right' }
-                    );
-                  }
-                }
-              }
+              // Generate hole positions (fast bbox grid or contour-driven placement).
+              // Contour sampling reads the PRISTINE `manifold` (not `manifoldWithHoles`)
+              // so candidates land on the solid cross-section; the depth loop below
+              // re-validates against the live `manifoldWithHoles`.
+              const holeBounds = { min1: actualYMin, max1: actualYMax, min2: actualZMin, max2: actualZMax };
+              // Contour mode clips to the full grid CELL (this part's region), not the
+              // geometry-bounds estimate: findGeometryBoundsAtCutPlane under-reports a
+              // hollow shell's cross-section to a tiny box, which would clip away almost
+              // the entire seam. The slice supplies the real material within the cell.
+              const cellBounds = { min1: yMin, max1: yMax, min2: zMin, max2: zMax };
+              const contour = useAdaptiveHoles
+                ? this.contourHolePositions(manifold, Manifold, CrossSection, cutPosition, 'x', cellBounds, spacing, holeRadius)
+                : null;
+              const sectionRadius = contour ? contour.radius : holeRadius;
+              const strategicPositions = (contour
+                ? contour.points
+                : this.gridHolePositions(holeBounds, spacing, edgeInset)
+              ).map(p => ({ y: p.c1, z: p.c2, label: p.label }));
 
               // Test each strategic position
               for (const pos of strategicPositions) {
@@ -1107,69 +1297,53 @@ export class ManifoldSplitter {
 
                 // Check if hole would break through model boundaries
                 const actualBounds = { min1: actualYMin, max1: actualYMax, min2: actualZMin, max2: actualZMax };
-                if (!this.isHoleSafe({ y: gridY, z: gridZ }, holeRadius, actualBounds, 'x')) {
+                if (!useAdaptiveHoles && !this.isHoleSafe({ y: gridY, z: gridZ }, holeRadius, actualBounds, 'x')) {
                   console.log(`    ✗ X-hole (${i},${y},${z}) ${pos.label}: Skipped (would break through model boundary)`);
                   continue;
                 }
 
-                // Create test cylinder (16 segments - optimized for performance)
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
-                  .translate([0, 0, -totalDepth/2])
-                  .rotate([0, 90, 0])
-                  .translate([cutPosition, gridY, gridZ]);
+                // Adaptive depth: try full depth, then shorter stubs, keeping the
+                // deepest that holds without punching through the wall.
+                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                let kept = false;
+                for (const tryDepth of depthsToTry) {
+                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -tryDepth / 2])
+                    .rotate([0, 90, 0])
+                    .translate([cutPosition, gridY, gridZ]);
+                  const beforeVol = manifoldWithHoles.volume();
+                  const testManifold = manifoldWithHoles.subtract(cylinder);
+                  const volumeRemoved = beforeVol - testManifold.volume();
+                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
+                  const removalRatio = volumeRemoved / expected;
 
-                // Test volume removal
-                const beforeVol = manifoldWithHoles.volume();
-                const testManifold = manifoldWithHoles.subtract(cylinder);
-                const volumeRemoved = beforeVol - testManifold.volume();
-                const removalRatio = volumeRemoved / expectedVolume;
-
-                // Only keep holes that remove sufficient volume
-                if (removalRatio >= minVolumeRatio) {
-                  // Smart depth checking: Skip for excellent holes (>90%), check borderline cases
-                  let depthRatio = 1.0; // Default for excellent holes
-                  let shouldKeep = true;
-
-                  if (removalRatio < 0.9) {
-                    // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
-                      .translate([0, 0, -totalDepth/4])
+                  let depthRatio = 1.0;
+                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
+                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -tryDepth / 4])
                       .rotate([0, 90, 0])
                       .translate([cutPosition, gridY, gridZ]);
-
-                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
-                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
-                    depthRatio = halfDepthRemoved / volumeRemoved;
-
-                    // Clean up intermediate objects
-                    halfDepthCylinder.delete();
-                    halfDepthManifold.delete();
-
-                    // Reject if material is spread across both halves (indicates two-wall penetration)
-                    if (depthRatio < 0.6) {
-                      shouldKeep = false;
-                    }
+                    const halfM = manifoldWithHoles.subtract(half);
+                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
+                    half.delete();
+                    halfM.delete();
                   }
 
-                  if (shouldKeep) {
-                    // Delete old manifoldWithHoles if it's not the original
-                    if (manifoldWithHoles !== manifold) {
-                      manifoldWithHoles.delete();
-                    }
+                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
                     manifoldWithHoles = testManifold;
                     holesCreated++;
-                    console.log(`    ✓ X-hole (${i},${y},${z}) ${pos.label} at (${cutPosition.toFixed(1)}, ${gridY.toFixed(1)}, ${gridZ.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
-                  } else {
-                    // Not keeping - clean up test manifold
-                    testManifold.delete();
+                    kept = true;
+                    cylinder.delete();
+                    console.log(`    ✓ X-hole (${i},${y},${z}) ${pos.label} at (${cutPosition.toFixed(1)}, ${gridY.toFixed(1)}, ${gridZ.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    break;
                   }
-                } else {
-                  // Didn't meet volume threshold - clean up test manifold
                   testManifold.delete();
+                  cylinder.delete();
                 }
-
-                // Always clean up cylinder
-                cylinder.delete();
+                if (!kept && process.env.HOLE_DIAG) {
+                  console.error(`HOLEDIAG_REJECT axis=x cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridY.toFixed(1)} c2=${gridZ.toFixed(1)} — no depth fit`);
+                }
               }
 
               if (holesCreated > 0) {
@@ -1214,64 +1388,37 @@ export class ManifoldSplitter {
                 [zMin, zMax]
               );
 
-              if (!geometryBounds) {
+              // Grid mode needs material bounds; contour mode does not (it reads the
+              // slice directly), so only grid mode skips an empty section here.
+              if (!geometryBounds && !useAdaptiveHoles) {
                 console.log(`  Y-axis section (${x}, ${i}, ${z}): No geometry found at cut plane`);
                 continue;
               }
 
-              // Use actual geometry bounds for hole placement
-              const actualXMin = geometryBounds.min1;
-              const actualXMax = geometryBounds.max1;
-              const actualZMin = geometryBounds.min2;
-              const actualZMax = geometryBounds.max2;
-
-              const sectionWidth = actualXMax - actualXMin;
-              const sectionHeight = actualZMax - actualZMin;
+              // Geometry bounds for grid mode; contour mode falls back to cell bounds.
+              const actualXMin = geometryBounds?.min1 ?? xMin;
+              const actualXMax = geometryBounds?.max1 ?? xMax;
+              const actualZMin = geometryBounds?.min2 ?? zMin;
+              const actualZMax = geometryBounds?.max2 ?? zMax;
 
               console.log(`  Actual geometry at cut: X[${actualXMin.toFixed(1)}, ${actualXMax.toFixed(1)}] Z[${actualZMin.toFixed(1)}, ${actualZMax.toFixed(1)}]`);
 
-              // Generate strategic hole positions based on spacing setting
-              const strategicPositions: Array<{x: number, z: number, label: string}> = [];
-
-              // Check if section is large enough for holes
-              if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerX = (actualXMin + actualXMax) / 2;
-                const centerZ = (actualZMin + actualZMax) / 2;
-
-                // Always add 4 corners + center (sparse mode minimum)
-                strategicPositions.push(
-                  { x: actualXMin + edgeInset, z: actualZMin + edgeInset, label: 'corner-BL' },
-                  { x: actualXMin + edgeInset, z: actualZMax - edgeInset, label: 'corner-TL' },
-                  { x: actualXMax - edgeInset, z: actualZMin + edgeInset, label: 'corner-BR' },
-                  { x: actualXMax - edgeInset, z: actualZMax - edgeInset, label: 'corner-TR' },
-                  { x: centerX, z: centerZ, label: 'center' }
-                );
-
-                // Add edge midpoints for normal and dense modes (if section large enough)
-                if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
-                  strategicPositions.push(
-                    { x: centerX, z: actualZMin + edgeInset, label: 'mid-bottom' },
-                    { x: centerX, z: actualZMax - edgeInset, label: 'mid-top' },
-                    { x: actualXMin + edgeInset, z: centerZ, label: 'mid-left' },
-                    { x: actualXMax - edgeInset, z: centerZ, label: 'mid-right' }
-                  );
-
-                  // Add 1/3 points for dense mode
-                  if (spacing === 'dense') {
-                    const oneThirdX = actualXMin + (actualXMax - actualXMin) / 3;
-                    const twoThirdX = actualXMin + 2 * (actualXMax - actualXMin) / 3;
-                    const oneThirdZ = actualZMin + (actualZMax - actualZMin) / 3;
-                    const twoThirdZ = actualZMin + 2 * (actualZMax - actualZMin) / 3;
-
-                    strategicPositions.push(
-                      { x: oneThirdX, z: actualZMin + edgeInset, label: '1/3-bottom-left' },
-                      { x: twoThirdX, z: actualZMin + edgeInset, label: '1/3-bottom-right' },
-                      { x: oneThirdX, z: actualZMax - edgeInset, label: '1/3-top-left' },
-                      { x: twoThirdX, z: actualZMax - edgeInset, label: '1/3-top-right' }
-                    );
-                  }
-                }
-              }
+              // Generate hole positions (fast bbox grid or contour-driven placement).
+              // Contour sampling reads the PRISTINE `manifold` (not `manifoldWithHoles`)
+              // so candidates land on the solid cross-section; the depth loop below
+              // re-validates against the live `manifoldWithHoles`.
+              const holeBounds = { min1: actualXMin, max1: actualXMax, min2: actualZMin, max2: actualZMax };
+              // Clip contour to the full grid CELL, not the under-reported geometry box
+              // (see X-loop note above).
+              const cellBounds = { min1: xMin, max1: xMax, min2: zMin, max2: zMax };
+              const contour = useAdaptiveHoles
+                ? this.contourHolePositions(manifold, Manifold, CrossSection, cutPosition, 'y', cellBounds, spacing, holeRadius)
+                : null;
+              const sectionRadius = contour ? contour.radius : holeRadius;
+              const strategicPositions = (contour
+                ? contour.points
+                : this.gridHolePositions(holeBounds, spacing, edgeInset)
+              ).map(p => ({ x: p.c1, z: p.c2, label: p.label }));
 
               // Test each strategic position
               for (const pos of strategicPositions) {
@@ -1282,66 +1429,53 @@ export class ManifoldSplitter {
 
                 // Check if hole would break through model boundaries
                 const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualZMin, max2: actualZMax };
-                if (!this.isHoleSafe({ x: gridX, z: gridZ }, holeRadius, actualBounds, 'y')) {
+                if (!useAdaptiveHoles && !this.isHoleSafe({ x: gridX, z: gridZ }, holeRadius, actualBounds, 'y')) {
                   console.log(`    ✗ Y-hole (${x},${i},${z}) ${pos.label}: Skipped (would break through model boundary)`);
                   continue;
                 }
 
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
-                  .translate([0, 0, -totalDepth/2])
-                  .rotate([90, 0, 0])
-                  .translate([gridX, cutPosition, gridZ]);
+                // Adaptive depth: try full depth, then shorter stubs, keeping the
+                // deepest that holds without punching through the wall.
+                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                let kept = false;
+                for (const tryDepth of depthsToTry) {
+                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -tryDepth / 2])
+                    .rotate([90, 0, 0])
+                    .translate([gridX, cutPosition, gridZ]);
+                  const beforeVol = manifoldWithHoles.volume();
+                  const testManifold = manifoldWithHoles.subtract(cylinder);
+                  const volumeRemoved = beforeVol - testManifold.volume();
+                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
+                  const removalRatio = volumeRemoved / expected;
 
-                const beforeVol = manifoldWithHoles.volume();
-                const testManifold = manifoldWithHoles.subtract(cylinder);
-                const volumeRemoved = beforeVol - testManifold.volume();
-                const removalRatio = volumeRemoved / expectedVolume;
-
-                if (removalRatio >= minVolumeRatio) {
-                  // Smart depth checking: Skip for excellent holes (>90%), check borderline cases
-                  let depthRatio = 1.0; // Default for excellent holes
-                  let shouldKeep = true;
-
-                  if (removalRatio < 0.9) {
-                    // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
-                      .translate([0, 0, -totalDepth/4])
+                  let depthRatio = 1.0;
+                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
+                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -tryDepth / 4])
                       .rotate([90, 0, 0])
                       .translate([gridX, cutPosition, gridZ]);
-
-                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
-                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
-                    depthRatio = halfDepthRemoved / volumeRemoved;
-
-                    // Clean up intermediate objects
-                    halfDepthCylinder.delete();
-                    halfDepthManifold.delete();
-
-                    // Reject if material is spread across both halves (indicates two-wall penetration)
-                    if (depthRatio < 0.6) {
-                      shouldKeep = false;
-                    }
+                    const halfM = manifoldWithHoles.subtract(half);
+                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
+                    half.delete();
+                    halfM.delete();
                   }
 
-                  if (shouldKeep) {
-                    // Delete old manifoldWithHoles if it's not the original
-                    if (manifoldWithHoles !== manifold) {
-                      manifoldWithHoles.delete();
-                    }
+                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
                     manifoldWithHoles = testManifold;
                     holesCreated++;
-                    console.log(`    ✓ Y-hole (${x},${i},${z}) ${pos.label} at (${gridX.toFixed(1)}, ${cutPosition.toFixed(1)}, ${gridZ.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
-                  } else {
-                    // Not keeping - clean up test manifold
-                    testManifold.delete();
+                    kept = true;
+                    cylinder.delete();
+                    console.log(`    ✓ Y-hole (${x},${i},${z}) ${pos.label} at (${gridX.toFixed(1)}, ${cutPosition.toFixed(1)}, ${gridZ.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    break;
                   }
-                } else {
-                  // Didn't meet volume threshold - clean up test manifold
                   testManifold.delete();
+                  cylinder.delete();
                 }
-
-                // Always clean up cylinder
-                cylinder.delete();
+                if (!kept && process.env.HOLE_DIAG) {
+                  console.error(`HOLEDIAG_REJECT axis=y cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridX.toFixed(1)} c2=${gridZ.toFixed(1)} — no depth fit`);
+                }
               }
 
               if (holesCreated > 0) {
@@ -1386,64 +1520,37 @@ export class ManifoldSplitter {
                 [yMin, yMax]
               );
 
-              if (!geometryBounds) {
+              // Grid mode needs material bounds; contour mode does not (it reads the
+              // slice directly), so only grid mode skips an empty section here.
+              if (!geometryBounds && !useAdaptiveHoles) {
                 console.log(`  Z-axis section (${x}, ${y}, ${i}): No geometry found at cut plane`);
                 continue;
               }
 
-              // Use actual geometry bounds for hole placement
-              const actualXMin = geometryBounds.min1;
-              const actualXMax = geometryBounds.max1;
-              const actualYMin = geometryBounds.min2;
-              const actualYMax = geometryBounds.max2;
-
-              const sectionWidth = actualXMax - actualXMin;
-              const sectionHeight = actualYMax - actualYMin;
+              // Geometry bounds for grid mode; contour mode falls back to cell bounds.
+              const actualXMin = geometryBounds?.min1 ?? xMin;
+              const actualXMax = geometryBounds?.max1 ?? xMax;
+              const actualYMin = geometryBounds?.min2 ?? yMin;
+              const actualYMax = geometryBounds?.max2 ?? yMax;
 
               console.log(`  Actual geometry at cut: X[${actualXMin.toFixed(1)}, ${actualXMax.toFixed(1)}] Y[${actualYMin.toFixed(1)}, ${actualYMax.toFixed(1)}]`);
 
-              // Generate strategic hole positions based on spacing setting
-              const strategicPositions: Array<{x: number, y: number, label: string}> = [];
-
-              // Check if section is large enough for holes
-              if (sectionWidth >= edgeInset * 2 && sectionHeight >= edgeInset * 2) {
-                const centerX = (actualXMin + actualXMax) / 2;
-                const centerY = (actualYMin + actualYMax) / 2;
-
-                // Always add 4 corners + center (sparse mode minimum)
-                strategicPositions.push(
-                  { x: actualXMin + edgeInset, y: actualYMin + edgeInset, label: 'corner-BL' },
-                  { x: actualXMin + edgeInset, y: actualYMax - edgeInset, label: 'corner-TL' },
-                  { x: actualXMax - edgeInset, y: actualYMin + edgeInset, label: 'corner-BR' },
-                  { x: actualXMax - edgeInset, y: actualYMax - edgeInset, label: 'corner-TR' },
-                  { x: centerX, y: centerY, label: 'center' }
-                );
-
-                // Add edge midpoints for normal and dense modes (if section large enough)
-                if (spacing !== 'sparse' && sectionWidth >= edgeInset * 4 && sectionHeight >= edgeInset * 4) {
-                  strategicPositions.push(
-                    { x: centerX, y: actualYMin + edgeInset, label: 'mid-bottom' },
-                    { x: centerX, y: actualYMax - edgeInset, label: 'mid-top' },
-                    { x: actualXMin + edgeInset, y: centerY, label: 'mid-left' },
-                    { x: actualXMax - edgeInset, y: centerY, label: 'mid-right' }
-                  );
-
-                  // Add 1/3 points for dense mode
-                  if (spacing === 'dense') {
-                    const oneThirdX = actualXMin + (actualXMax - actualXMin) / 3;
-                    const twoThirdX = actualXMin + 2 * (actualXMax - actualXMin) / 3;
-                    const oneThirdY = actualYMin + (actualYMax - actualYMin) / 3;
-                    const twoThirdY = actualYMin + 2 * (actualYMax - actualYMin) / 3;
-
-                    strategicPositions.push(
-                      { x: oneThirdX, y: actualYMin + edgeInset, label: '1/3-bottom-left' },
-                      { x: twoThirdX, y: actualYMin + edgeInset, label: '1/3-bottom-right' },
-                      { x: oneThirdX, y: actualYMax - edgeInset, label: '1/3-top-left' },
-                      { x: twoThirdX, y: actualYMax - edgeInset, label: '1/3-top-right' }
-                    );
-                  }
-                }
-              }
+              // Generate hole positions (fast bbox grid or contour-driven placement).
+              // Contour sampling reads the PRISTINE `manifold` (not `manifoldWithHoles`)
+              // so candidates land on the solid cross-section; the depth loop below
+              // re-validates against the live `manifoldWithHoles`.
+              const holeBounds = { min1: actualXMin, max1: actualXMax, min2: actualYMin, max2: actualYMax };
+              // Clip contour to the full grid CELL, not the under-reported geometry box
+              // (see X-loop note above).
+              const cellBounds = { min1: xMin, max1: xMax, min2: yMin, max2: yMax };
+              const contour = useAdaptiveHoles
+                ? this.contourHolePositions(manifold, Manifold, CrossSection, cutPosition, 'z', cellBounds, spacing, holeRadius)
+                : null;
+              const sectionRadius = contour ? contour.radius : holeRadius;
+              const strategicPositions = (contour
+                ? contour.points
+                : this.gridHolePositions(holeBounds, spacing, edgeInset)
+              ).map(p => ({ x: p.c1, y: p.c2, label: p.label }));
 
               // Test each strategic position
               for (const pos of strategicPositions) {
@@ -1454,64 +1561,51 @@ export class ManifoldSplitter {
 
                 // Check if hole would break through model boundaries
                 const actualBounds = { min1: actualXMin, max1: actualXMax, min2: actualYMin, max2: actualYMax };
-                if (!this.isHoleSafe({ x: gridX, y: gridY }, holeRadius, actualBounds, 'z')) {
+                if (!useAdaptiveHoles && !this.isHoleSafe({ x: gridX, y: gridY }, holeRadius, actualBounds, 'z')) {
                   console.log(`    ✗ Z-hole (${x},${y},${i}) ${pos.label}: Skipped (would break through model boundary)`);
                   continue;
                 }
 
-                const cylinder = Manifold.cylinder(totalDepth, holeRadius, holeRadius, 16)
-                  .translate([0, 0, -totalDepth/2])
-                  .translate([gridX, gridY, cutPosition]);
+                // Adaptive depth: try full depth, then shorter stubs, keeping the
+                // deepest that holds without punching through the wall.
+                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                let kept = false;
+                for (const tryDepth of depthsToTry) {
+                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -tryDepth / 2])
+                    .translate([gridX, gridY, cutPosition]);
+                  const beforeVol = manifoldWithHoles.volume();
+                  const testManifold = manifoldWithHoles.subtract(cylinder);
+                  const volumeRemoved = beforeVol - testManifold.volume();
+                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
+                  const removalRatio = volumeRemoved / expected;
 
-                const beforeVol = manifoldWithHoles.volume();
-                const testManifold = manifoldWithHoles.subtract(cylinder);
-                const volumeRemoved = beforeVol - testManifold.volume();
-                const removalRatio = volumeRemoved / expectedVolume;
-
-                if (removalRatio >= minVolumeRatio) {
-                  // Smart depth checking: Skip for excellent holes (>90%), check borderline cases
-                  let depthRatio = 1.0; // Default for excellent holes
-                  let shouldKeep = true;
-
-                  if (removalRatio < 0.9) {
-                    // Borderline case - apply depth ratio check to detect through-wall penetration
-                    const halfDepthCylinder = Manifold.cylinder(totalDepth/2, holeRadius, holeRadius, 16)
-                      .translate([0, 0, -totalDepth/4])
+                  let depthRatio = 1.0;
+                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
+                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -tryDepth / 4])
                       .translate([gridX, gridY, cutPosition]);
-
-                    const halfDepthManifold = manifoldWithHoles.subtract(halfDepthCylinder);
-                    const halfDepthRemoved = beforeVol - halfDepthManifold.volume();
-                    depthRatio = halfDepthRemoved / volumeRemoved;
-
-                    // Clean up intermediate objects
-                    halfDepthCylinder.delete();
-                    halfDepthManifold.delete();
-
-                    // Reject if material is spread across both halves (indicates two-wall penetration)
-                    if (depthRatio < 0.6) {
-                      shouldKeep = false;
-                    }
+                    const halfM = manifoldWithHoles.subtract(half);
+                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
+                    half.delete();
+                    halfM.delete();
                   }
 
-                  if (shouldKeep) {
-                    // Delete old manifoldWithHoles if it's not the original
-                    if (manifoldWithHoles !== manifold) {
-                      manifoldWithHoles.delete();
-                    }
+                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
                     manifoldWithHoles = testManifold;
                     holesCreated++;
-                    console.log(`    ✓ Z-hole (${x},${y},${i}) ${pos.label} at (${gridX.toFixed(1)}, ${gridY.toFixed(1)}, ${cutPosition.toFixed(1)}): ${volumeRemoved.toFixed(1)} mm³ (${(removalRatio*100).toFixed(0)}%, depth: ${(depthRatio*100).toFixed(0)}%)`);
-                  } else {
-                    // Not keeping - clean up test manifold
-                    testManifold.delete();
+                    kept = true;
+                    cylinder.delete();
+                    console.log(`    ✓ Z-hole (${x},${y},${i}) ${pos.label} at (${gridX.toFixed(1)}, ${gridY.toFixed(1)}, ${cutPosition.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    break;
                   }
-                } else {
-                  // Didn't meet volume threshold - clean up test manifold
                   testManifold.delete();
+                  cylinder.delete();
                 }
-
-                // Always clean up cylinder
-                cylinder.delete();
+                if (!kept && process.env.HOLE_DIAG) {
+                  console.error(`HOLEDIAG_REJECT axis=z cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridX.toFixed(1)} c2=${gridY.toFixed(1)} — no depth fit`);
+                }
               }
 
               if (holesCreated > 0) {
