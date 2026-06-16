@@ -668,16 +668,26 @@ export class ManifoldSplitter {
     section.delete();
     rect.delete();
 
-    // Erode by radius; shrink radius if the wall is too thin to fit the dowel.
-    let radius = holeRadius;
+    // Keep dowel centres a buffer away from the cut-face edges so a dowel can't
+    // cut through a nearby surface as the wall curves over its depth. Erode by
+    // (radius + buffer); if that leaves no core (thin wall), fall back to a
+    // smaller buffer, then none, then a smaller dowel — so thin walls still get a
+    // (necessarily closer) dowel rather than none.
+    const edgeBuffer = 1.5;
     const floor = holeRadius * 0.45;
+    const attempts = [
+      { r: holeRadius, b: edgeBuffer },
+      { r: holeRadius, b: edgeBuffer * 0.5 },
+      { r: holeRadius, b: 0 },
+      { r: holeRadius * 0.7, b: 0 },
+      { r: floor, b: 0 },
+    ];
+    let radius = holeRadius;
     let core: any = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const c = clipped.offset(-radius, 'Round').simplify();
-      if (c.area() > 1e-6) { core = c; break; }
+    for (const a of attempts) {
+      const c = clipped.offset(-(a.r + a.b), 'Round').simplify();
+      if (c.area() > 1e-6) { core = c; radius = a.r; break; }
       c.delete();
-      if (radius <= floor) break;
-      radius = Math.max(floor, radius * 0.7);
     }
     clipped.delete();
 
@@ -1202,19 +1212,22 @@ export class ManifoldSplitter {
         this.log('Creating alignment holes before cutting...');
         const holeRadius = (options.alignmentHoles.diameter || 1.8) / 2;
         const holeDepth = options.alignmentHoles.depth || 3;
-        const totalDepth = holeDepth * 2;
+        // Break-through guard: a dowel must leave at least this much wall beyond its
+        // tip on each side, and a probe extending that far must be this embedded in
+        // the pristine mesh, or the dowel would punch out of a too-thin part.
+        const dowelMargin = 0.7;
+        const embedThreshold = 0.96;
         const spacing = options.alignmentHoles.spacing || 'normal';
         // Intensive material-following placement vs. the fast bounding-box grid.
         const useAdaptiveHoles = options.alignmentHoles.adaptivePlacement === true;
 
-        // Strategic hole placement: corners + center + midpoints
-        const minVolumeRatio = 0.8; // Require 80% of expected volume to be removed
+        // Strategic hole placement: corners + center + midpoints (grid mode)
         const edgeInset = holeRadius * 2.5; // Distance from edges for hole placement
         const spacingDesc = spacing === 'sparse' ? 'corners + center' :
                            spacing === 'normal' ? 'corners + center + midpoints' :
                            'corners + center + midpoints + 1/3 points';
         this.log(`Strategic hole placement (${spacing}): ${spacingDesc}`);
-        this.log(`Quality thresholds: volume ≥${minVolumeRatio*100}%, edge inset ${edgeInset.toFixed(1)}mm, depth ratio ≥60%`);
+        this.log(`Break-through guard: ≥${holeDepth}mm/side + ${dowelMargin}mm wall, probe embed ≥${embedThreshold * 100}%`);
 
         // Calculate total cuts for progress tracking
         const totalCuts = (sections.x - 1) * sections.y * sections.z +
@@ -1302,47 +1315,42 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                // Adaptive depth: try full depth, then shorter stubs, keeping the
-                // deepest that holds without punching through the wall.
-                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                // Break-through guard + adaptive depth. Each side of the cut must
+                // have >= holeDepth (+margin) of material along the drill axis, or
+                // the dowel would punch out of a too-thin part's far surface. Probe a
+                // cylinder that reaches `dowelMargin` PAST each dowel tip against the
+                // PRISTINE mesh and require it ~fully embedded. Try full depth first,
+                // then shorter dowels so thinner regions still get a (shallower) hole.
+                const perSideDepths = [holeDepth, holeDepth * (2 / 3), holeDepth / 3];
                 let kept = false;
-                for (const tryDepth of depthsToTry) {
-                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
-                    .translate([0, 0, -tryDepth / 2])
+                for (const d of perSideDepths) {
+                  const probeLen = 2 * (d + dowelMargin);
+                  const probe = Manifold.cylinder(probeLen, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -probeLen / 2])
                     .rotate([0, 90, 0])
                     .translate([cutPosition, gridY, gridZ]);
-                  const beforeVol = manifoldWithHoles.volume();
-                  const testManifold = manifoldWithHoles.subtract(cylinder);
-                  const volumeRemoved = beforeVol - testManifold.volume();
-                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
-                  const removalRatio = volumeRemoved / expected;
-
-                  let depthRatio = 1.0;
-                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
-                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
-                      .translate([0, 0, -tryDepth / 4])
+                  const inside = probe.intersect(manifold);
+                  const embedded = inside.volume() / probe.volume();
+                  inside.delete();
+                  probe.delete();
+                  if (embedded >= embedThreshold) {
+                    const dowelLen = 2 * d;
+                    const dowel = Manifold.cylinder(dowelLen, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -dowelLen / 2])
                       .rotate([0, 90, 0])
                       .translate([cutPosition, gridY, gridZ]);
-                    const halfM = manifoldWithHoles.subtract(half);
-                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
-                    half.delete();
-                    halfM.delete();
-                  }
-
-                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    const newM = manifoldWithHoles.subtract(dowel);
                     if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
-                    manifoldWithHoles = testManifold;
+                    manifoldWithHoles = newM;
+                    dowel.delete();
                     holesCreated++;
                     kept = true;
-                    cylinder.delete();
-                    console.log(`    ✓ X-hole (${i},${y},${z}) ${pos.label} at (${cutPosition.toFixed(1)}, ${gridY.toFixed(1)}, ${gridZ.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    console.log(`    ✓ X-hole (${i},${y},${z}) ${pos.label} at (${cutPosition.toFixed(1)}, ${gridY.toFixed(1)}, ${gridZ.toFixed(1)}): ${d.toFixed(1)}mm/side r=${sectionRadius.toFixed(2)} (embed ${(embedded * 100).toFixed(0)}%)`);
                     break;
                   }
-                  testManifold.delete();
-                  cylinder.delete();
                 }
                 if (!kept && process.env.HOLE_DIAG) {
-                  console.error(`HOLEDIAG_REJECT axis=x cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridY.toFixed(1)} c2=${gridZ.toFixed(1)} — no depth fit`);
+                  console.error(`HOLEDIAG_REJECT axis=x cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridY.toFixed(1)} c2=${gridZ.toFixed(1)} — too thin for a dowel`);
                 }
               }
 
@@ -1434,44 +1442,34 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                // Adaptive depth: try full depth, then shorter stubs, keeping the
-                // deepest that holds without punching through the wall.
-                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                // Break-through guard + adaptive depth (see X-loop note).
+                const perSideDepths = [holeDepth, holeDepth * (2 / 3), holeDepth / 3];
                 let kept = false;
-                for (const tryDepth of depthsToTry) {
-                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
-                    .translate([0, 0, -tryDepth / 2])
+                for (const d of perSideDepths) {
+                  const probeLen = 2 * (d + dowelMargin);
+                  const probe = Manifold.cylinder(probeLen, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -probeLen / 2])
                     .rotate([90, 0, 0])
                     .translate([gridX, cutPosition, gridZ]);
-                  const beforeVol = manifoldWithHoles.volume();
-                  const testManifold = manifoldWithHoles.subtract(cylinder);
-                  const volumeRemoved = beforeVol - testManifold.volume();
-                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
-                  const removalRatio = volumeRemoved / expected;
-
-                  let depthRatio = 1.0;
-                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
-                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
-                      .translate([0, 0, -tryDepth / 4])
+                  const inside = probe.intersect(manifold);
+                  const embedded = inside.volume() / probe.volume();
+                  inside.delete();
+                  probe.delete();
+                  if (embedded >= embedThreshold) {
+                    const dowelLen = 2 * d;
+                    const dowel = Manifold.cylinder(dowelLen, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -dowelLen / 2])
                       .rotate([90, 0, 0])
                       .translate([gridX, cutPosition, gridZ]);
-                    const halfM = manifoldWithHoles.subtract(half);
-                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
-                    half.delete();
-                    halfM.delete();
-                  }
-
-                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    const newM = manifoldWithHoles.subtract(dowel);
                     if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
-                    manifoldWithHoles = testManifold;
+                    manifoldWithHoles = newM;
+                    dowel.delete();
                     holesCreated++;
                     kept = true;
-                    cylinder.delete();
-                    console.log(`    ✓ Y-hole (${x},${i},${z}) ${pos.label} at (${gridX.toFixed(1)}, ${cutPosition.toFixed(1)}, ${gridZ.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    console.log(`    ✓ Y-hole (${x},${i},${z}) ${pos.label} at (${gridX.toFixed(1)}, ${cutPosition.toFixed(1)}, ${gridZ.toFixed(1)}): ${d.toFixed(1)}mm/side r=${sectionRadius.toFixed(2)} (embed ${(embedded * 100).toFixed(0)}%)`);
                     break;
                   }
-                  testManifold.delete();
-                  cylinder.delete();
                 }
                 if (!kept && process.env.HOLE_DIAG) {
                   console.error(`HOLEDIAG_REJECT axis=y cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridX.toFixed(1)} c2=${gridZ.toFixed(1)} — no depth fit`);
@@ -1566,42 +1564,32 @@ export class ManifoldSplitter {
                   continue;
                 }
 
-                // Adaptive depth: try full depth, then shorter stubs, keeping the
-                // deepest that holds without punching through the wall.
-                const depthsToTry = [totalDepth, totalDepth * (2 / 3), totalDepth * (1 / 3)];
+                // Break-through guard + adaptive depth (see X-loop note).
+                const perSideDepths = [holeDepth, holeDepth * (2 / 3), holeDepth / 3];
                 let kept = false;
-                for (const tryDepth of depthsToTry) {
-                  const cylinder = Manifold.cylinder(tryDepth, sectionRadius, sectionRadius, 16)
-                    .translate([0, 0, -tryDepth / 2])
+                for (const d of perSideDepths) {
+                  const probeLen = 2 * (d + dowelMargin);
+                  const probe = Manifold.cylinder(probeLen, sectionRadius, sectionRadius, 16)
+                    .translate([0, 0, -probeLen / 2])
                     .translate([gridX, gridY, cutPosition]);
-                  const beforeVol = manifoldWithHoles.volume();
-                  const testManifold = manifoldWithHoles.subtract(cylinder);
-                  const volumeRemoved = beforeVol - testManifold.volume();
-                  const expected = Math.PI * sectionRadius * sectionRadius * tryDepth;
-                  const removalRatio = volumeRemoved / expected;
-
-                  let depthRatio = 1.0;
-                  if (removalRatio >= minVolumeRatio && removalRatio < 0.9) {
-                    const half = Manifold.cylinder(tryDepth / 2, sectionRadius, sectionRadius, 16)
-                      .translate([0, 0, -tryDepth / 4])
+                  const inside = probe.intersect(manifold);
+                  const embedded = inside.volume() / probe.volume();
+                  inside.delete();
+                  probe.delete();
+                  if (embedded >= embedThreshold) {
+                    const dowelLen = 2 * d;
+                    const dowel = Manifold.cylinder(dowelLen, sectionRadius, sectionRadius, 16)
+                      .translate([0, 0, -dowelLen / 2])
                       .translate([gridX, gridY, cutPosition]);
-                    const halfM = manifoldWithHoles.subtract(half);
-                    depthRatio = (beforeVol - halfM.volume()) / volumeRemoved;
-                    half.delete();
-                    halfM.delete();
-                  }
-
-                  if (removalRatio >= minVolumeRatio && depthRatio >= 0.6) {
+                    const newM = manifoldWithHoles.subtract(dowel);
                     if (manifoldWithHoles !== manifold) manifoldWithHoles.delete();
-                    manifoldWithHoles = testManifold;
+                    manifoldWithHoles = newM;
+                    dowel.delete();
                     holesCreated++;
                     kept = true;
-                    cylinder.delete();
-                    console.log(`    ✓ Z-hole (${x},${y},${i}) ${pos.label} at (${gridX.toFixed(1)}, ${gridY.toFixed(1)}, ${cutPosition.toFixed(1)}): d=${tryDepth.toFixed(1)} r=${sectionRadius.toFixed(2)} (${(removalRatio * 100).toFixed(0)}%, depth ${(depthRatio * 100).toFixed(0)}%)`);
+                    console.log(`    ✓ Z-hole (${x},${y},${i}) ${pos.label} at (${gridX.toFixed(1)}, ${gridY.toFixed(1)}, ${cutPosition.toFixed(1)}): ${d.toFixed(1)}mm/side r=${sectionRadius.toFixed(2)} (embed ${(embedded * 100).toFixed(0)}%)`);
                     break;
                   }
-                  testManifold.delete();
-                  cylinder.delete();
                 }
                 if (!kept && process.env.HOLE_DIAG) {
                   console.error(`HOLEDIAG_REJECT axis=z cut=${cutPosition.toFixed(1)} ${pos.label} c1=${gridX.toFixed(1)} c2=${gridY.toFixed(1)} — no depth fit`);
