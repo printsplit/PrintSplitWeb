@@ -11,14 +11,13 @@ interface AlignmentHoles {
   diameter: number;
   depth: number;
   spacing: 'sparse' | 'normal' | 'dense';
+  adaptivePlacement: boolean;
 }
 
 interface DimensionControlsProps {
   dimensions: Dimensions;
   onChange: (dimensions: Dimensions) => void;
   onBlur?: () => void;
-  smartBoundaries: boolean;
-  onSmartBoundariesChange: (enabled: boolean) => void;
   balancedCutting: boolean;
   onBalancedCuttingChange: (enabled: boolean) => void;
   alignmentHoles: AlignmentHoles;
@@ -31,8 +30,6 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
   dimensions,
   onChange,
   onBlur,
-  smartBoundaries,
-  onSmartBoundariesChange,
   balancedCutting,
   onBalancedCuttingChange,
   alignmentHoles,
@@ -175,22 +172,6 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
         <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem' }}>
           <input
             type="checkbox"
-            checked={smartBoundaries}
-            onChange={(e) => onSmartBoundariesChange(e.target.checked)}
-            disabled={splitMode === 'manual'}
-            style={{ marginRight: '8px' }}
-          />
-          Smart boundaries (prevent floating parts)
-        </label>
-        <div style={{ marginTop: '4px', fontSize: '0.75rem', color: '#999', marginLeft: '20px' }}>
-          Adjusts cube boundaries to keep connected parts together
-        </div>
-      </div>
-
-      <div style={{ marginTop: '12px', opacity: splitMode === 'manual' ? 0.5 : 1 }}>
-        <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem' }}>
-          <input
-            type="checkbox"
             checked={balancedCutting}
             onChange={(e) => onBalancedCuttingChange(e.target.checked)}
             disabled={splitMode === 'manual'}
@@ -261,6 +242,20 @@ const DimensionControls: React.FC<DimensionControlsProps> = ({
               {alignmentHoles.spacing === 'sparse' && 'Corners + center only'}
               {alignmentHoles.spacing === 'normal' && 'Corners + center + edge midpoints'}
               {alignmentHoles.spacing === 'dense' && 'Corners + center + edges + 1/3 points'}
+            </div>
+            <div style={{ marginTop: '10px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={alignmentHoles.adaptivePlacement}
+                  onChange={(e) => onAlignmentHolesChange({ ...alignmentHoles, adaptivePlacement: e.target.checked })}
+                  style={{ marginRight: '8px' }}
+                />
+                Adaptive placement (fits irregular shapes)
+              </label>
+              <div style={{ fontSize: '0.7rem', color: '#666', marginLeft: '20px', marginTop: '4px' }}>
+                Places holes on the actual material instead of a fixed grid, so curved/irregular faces still get holes. Slower to process.
+              </div>
             </div>
           </div>
         )}

@@ -2,6 +2,24 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader, OrbitControls } from 'three-stdlib';
 
+/**
+ * Remove an object from its scene AND free its GPU resources. Three.js's
+ * remove() alone leaks geometries and materials, which accumulate over a
+ * session (especially while dragging cut planes, which rebuilds geometry on
+ * every pointer move).
+ */
+function disposeObject(obj: THREE.Object3D) {
+  const mesh = obj as THREE.Mesh | THREE.LineSegments;
+  mesh.geometry?.dispose();
+  const material = (mesh as any).material;
+  if (Array.isArray(material)) {
+    material.forEach((m: THREE.Material) => m.dispose());
+  } else if (material) {
+    (material as THREE.Material).dispose();
+  }
+  obj.removeFromParent();
+}
+
 interface ProcessingResult {
   success: boolean;
   parts?: Array<{
@@ -27,6 +45,7 @@ interface SplitPositions {
 interface STLPreviewProps {
   file: File | null;
   dimensions: { x: number; y: number; z: number };
+  balancedCutting?: boolean;
   processingResult?: ProcessingResult | null;
   splitPositions?: SplitPositions | null;
   onSplitPositionsChange?: (positions: SplitPositions) => void;
@@ -48,7 +67,7 @@ interface ModelInfo {
   originalSize: THREE.Vector3;
 }
 
-const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingResult, splitPositions, onSplitPositionsChange }) => {
+const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, balancedCutting = true, processingResult, splitPositions, onSplitPositionsChange }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -333,9 +352,9 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
 
     const rebuildCubeOutlines = () => {
       if (!sceneRef.current || !modelInfoRef.current) return;
-      // Remove existing cube outlines
+      // Remove existing cube outlines (and free their GPU resources)
       const toRemove = sceneRef.current.children.filter(c => c.userData.isCubeOutline);
-      toRemove.forEach(obj => sceneRef.current!.remove(obj));
+      toRemove.forEach(disposeObject);
 
       const info = modelInfoRef.current;
       const min = info.sceneBounds.min;
@@ -370,6 +389,8 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
             const sz = zBounds[zi + 1] - zBounds[zi];
             const cubeGeometry = new THREE.BoxGeometry(sx, sy, sz);
             const cubeWireframe = new THREE.WireframeGeometry(cubeGeometry);
+            // The BoxGeometry is only a source for the wireframe; free it now.
+            cubeGeometry.dispose();
             const cubeLine = new THREE.LineSegments(cubeWireframe, cubeOutlineMaterial);
             cubeLine.position.set(
               (xBounds[xi] + xBounds[xi + 1]) / 2,
@@ -439,7 +460,7 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
         const objectsToRemove = sceneRef.current!.children.filter(
           child => child.userData.isModel || child.userData.isCutLine || child.userData.isCubeOutline || child.userData.isCutPlane
         );
-        objectsToRemove.forEach(obj => sceneRef.current!.remove(obj));
+        objectsToRemove.forEach(disposeObject);
 
         if (cancelled) return;
 
@@ -468,7 +489,7 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
     return () => {
       cancelled = true;
     };
-  }, [file, dimensions, viewMode, processingResult, sceneReady, splitPositions]);
+  }, [file, dimensions, balancedCutting, viewMode, processingResult, sceneReady, splitPositions]);
 
   const loadSTLFile = async (source: File | string): Promise<{ geometry: THREE.BufferGeometry; originalSize: THREE.Vector3 }> => {
     console.log('Reading STL file:', source instanceof File ? source.name : source);
@@ -702,18 +723,26 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
       yCuts = splitPositions.y.map(mm => min.y + mm * scaleFactorApprox);
       zCuts = splitPositions.z.map(mm => min.z + mm * scaleFactorApprox);
     } else {
-      // Uniform mode: compute from dimensions
-      const cubeX = dimensions.x * scaleFactorApprox;
-      const cubeY = dimensions.y * scaleFactorApprox;
-      const cubeZ = dimensions.z * scaleFactorApprox;
+      // Uniform mode: compute from dimensions, mirroring the server's
+      // calculateBalancedSplit so the preview grid matches the actual cuts.
+      // When balanced cutting is on and the leftover piece would be small
+      // (< half a max dimension), the server distributes pieces evenly instead
+      // of leaving a thin end piece.
+      const axisCuts = (axisSize: number, axisMin: number, maxDim: number): number[] => {
+        const numSections = Math.max(1, Math.ceil(axisSize / maxDim));
+        const remainder = axisSize % maxDim;
+        const shouldBalance = balancedCutting && remainder > 0 && remainder < maxDim * 0.5;
+        const pieceSize = shouldBalance ? axisSize / numSections : maxDim;
+        const cuts: number[] = [];
+        for (let i = 1; i < numSections; i++) {
+          cuts.push(axisMin + Math.min(i * pieceSize, axisSize));
+        }
+        return cuts;
+      };
 
-      const sectionsX = Math.max(1, Math.ceil(size.x / cubeX));
-      const sectionsY = Math.max(1, Math.ceil(size.y / cubeY));
-      const sectionsZ = Math.max(1, Math.ceil(size.z / cubeZ));
-
-      for (let i = 1; i < sectionsX; i++) xCuts.push(min.x + i * cubeX);
-      for (let i = 1; i < sectionsY; i++) yCuts.push(min.y + i * cubeY);
-      for (let i = 1; i < sectionsZ; i++) zCuts.push(min.z + i * cubeZ);
+      xCuts = axisCuts(size.x, min.x, dimensions.x * scaleFactorApprox);
+      yCuts = axisCuts(size.y, min.y, dimensions.y * scaleFactorApprox);
+      zCuts = axisCuts(size.z, min.z, dimensions.z * scaleFactorApprox);
     }
 
     // Only show grid if splitting is needed
@@ -834,6 +863,8 @@ const STLPreview: React.FC<STLPreviewProps> = ({ file, dimensions, processingRes
 
             const cubeGeometry = new THREE.BoxGeometry(sx, sy, sz);
             const cubeWireframe = new THREE.WireframeGeometry(cubeGeometry);
+            // The BoxGeometry is only a source for the wireframe; free it now.
+            cubeGeometry.dispose();
             const cubeLine = new THREE.LineSegments(cubeWireframe, cubeOutlineMaterial);
 
             cubeLine.position.set(

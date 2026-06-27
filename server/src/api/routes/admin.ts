@@ -153,7 +153,7 @@ router.get('/jobs', authenticateAdmin, async (req, res) => {
           data: {
             fileName: job.data.fileName,
             dimensions: job.data.dimensions,
-            smartBoundaries: job.data.smartBoundaries,
+            balancedCutting: job.data.balancedCutting,
           },
           createdAt: job.timestamp,
           processedAt: job.processedOn || null,

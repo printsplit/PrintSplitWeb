@@ -7,7 +7,6 @@ export interface ProcessingJobData {
     y: number;
     z: number;
   };
-  smartBoundaries?: boolean;
   balancedCutting?: boolean;
   splitPositions?: { x: number[]; y: number[]; z: number[] };
   alignmentHoles?: {
@@ -15,6 +14,7 @@ export interface ProcessingJobData {
     diameter: number;
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
+    adaptivePlacement?: boolean;
   };
   _cancelled?: boolean; // Internal flag for job cancellation
 }

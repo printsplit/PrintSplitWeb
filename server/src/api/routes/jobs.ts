@@ -1,5 +1,5 @@
 import express from 'express';
-import { getJobStatus, getRepairJobStatus, cancelJob, getQueueStats } from '../../worker/queue';
+import { getJobStatus, getRepairJobStatus, cancelJob, cancelRepairJob, getQueueStats } from '../../worker/queue';
 import { JobStatus } from '../../types/job';
 
 const router = express.Router();
@@ -66,7 +66,9 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const job = await getJobStatus(id) || await getRepairJobStatus(id);
+    const processingJob = await getJobStatus(id);
+    const job = processingJob || await getRepairJobStatus(id);
+    const isRepairJob = !processingJob && !!job;
 
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
@@ -81,9 +83,13 @@ router.delete('/:id', async (req, res) => {
       await job.update(jobData);
       console.log(`⚠️  User set cancellation flag for active job ${id}`);
     } else {
-      // For waiting/delayed jobs, just remove them
-      await cancelJob(id);
-      console.log(`⚠️  User removed ${state} job ${id}`);
+      // For waiting/delayed jobs, remove them from the correct queue
+      if (isRepairJob) {
+        await cancelRepairJob(id);
+      } else {
+        await cancelJob(id);
+      }
+      console.log(`⚠️  User removed ${state} ${isRepairJob ? 'repair ' : ''}job ${id}`);
     }
 
     res.json({

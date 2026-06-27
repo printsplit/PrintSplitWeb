@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import FileUpload from '../components/FileUpload';
 import DimensionControls from '../components/DimensionControls';
 import STLPreview from '../components/STLPreview';
@@ -18,6 +18,7 @@ interface AlignmentHoles {
   diameter: number;
   depth: number;
   spacing: 'sparse' | 'normal' | 'dense';
+  adaptivePlacement: boolean;
 }
 
 interface ProcessingState {
@@ -51,13 +52,13 @@ export function HomePage() {
         const parsed = JSON.parse(savedSettings);
         return {
           dimensions: parsed.dimensions || { x: 200, y: 200, z: 200 },
-          smartBoundaries: parsed.smartBoundaries !== undefined ? parsed.smartBoundaries : true,
           balancedCutting: parsed.balancedCutting !== undefined ? parsed.balancedCutting : true,
           alignmentHoles: {
             enabled: parsed.alignmentHoles?.enabled || false,
             diameter: parsed.alignmentHoles?.diameter || 1.8,
             depth: parsed.alignmentHoles?.depth || 3,
-            spacing: parsed.alignmentHoles?.spacing || 'normal'
+            spacing: parsed.alignmentHoles?.spacing || 'normal',
+            adaptivePlacement: parsed.alignmentHoles?.adaptivePlacement || false
           },
           splitMode: parsed.splitMode || 'uniform',
           splitPositions: parsed.splitPositions || null
@@ -70,9 +71,8 @@ export function HomePage() {
     // Return defaults if loading fails
     return {
       dimensions: { x: 200, y: 200, z: 200 },
-      smartBoundaries: true,
       balancedCutting: true,
-      alignmentHoles: { enabled: false, diameter: 2.0, depth: 3, spacing: 'normal' },
+      alignmentHoles: { enabled: false, diameter: 1.8, depth: 3, spacing: 'normal', adaptivePlacement: false },
       splitMode: 'uniform' as const,
       splitPositions: null
     };
@@ -83,7 +83,6 @@ export function HomePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dimensions, setDimensions] = useState<Dimensions>(settings.dimensions);
   const [debouncedDimensions, setDebouncedDimensions] = useState<Dimensions>(settings.dimensions);
-  const [smartBoundaries, setSmartBoundaries] = useState<boolean>(settings.smartBoundaries);
   const [balancedCutting, setBalancedCutting] = useState<boolean>(settings.balancedCutting);
   const [alignmentHoles, setAlignmentHoles] = useState<AlignmentHoles>(settings.alignmentHoles);
   const [splitMode, setSplitMode] = useState<'uniform' | 'manual'>(settings.splitMode);
@@ -98,12 +97,20 @@ export function HomePage() {
   const [meshValidation, setMeshValidation] = useState<MeshValidation | null>(null);
   const [validating, setValidating] = useState(false);
 
+  // Controls the active job-polling loop so it can be cancelled when a new job
+  // starts or the component unmounts (prevents stale progress updates).
+  const pollAbortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight polling when the component unmounts.
+  useEffect(() => {
+    return () => pollAbortRef.current?.abort();
+  }, []);
+
   // Save settings to localStorage whenever they change
   const saveSettings = () => {
     try {
       const settingsToSave = {
         dimensions,
-        smartBoundaries,
         balancedCutting,
         alignmentHoles,
         splitMode,
@@ -127,7 +134,7 @@ export function HomePage() {
   // Save settings whenever relevant state changes
   useEffect(() => {
     saveSettings();
-  }, [dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitMode, splitPositions]);
+  }, [dimensions, balancedCutting, alignmentHoles, splitMode, splitPositions]);
 
   const handleFileSelect = async (file: File) => {
     setSelectedFile(file);
@@ -166,10 +173,6 @@ export function HomePage() {
     setDebouncedDimensions(dimensions);
   };
 
-  const handleSmartBoundariesChange = (enabled: boolean) => {
-    setSmartBoundaries(enabled);
-  };
-
   const handleBalancedCuttingChange = (enabled: boolean) => {
     setBalancedCutting(enabled);
   };
@@ -183,6 +186,12 @@ export function HomePage() {
       alert('Please select an STL file');
       return;
     }
+
+    // Cancel any previous polling loop before starting a new job.
+    pollAbortRef.current?.abort();
+    const abortController = new AbortController();
+    pollAbortRef.current = abortController;
+    const { signal } = abortController;
 
     setProcessing({ isProcessing: true, progress: 0, status: 'Uploading file...' });
     setLastResult(null);
@@ -198,7 +207,6 @@ export function HomePage() {
         fileId,
         fileName,
         dimensions,
-        smartBoundaries,
         balancedCutting,
         alignmentHoles,
         ...(splitMode === 'manual' && splitPositions ? { splitPositions } : {}),
@@ -210,11 +218,12 @@ export function HomePage() {
       // Step 3: Wait for job completion with progress updates
       setProcessing(prev => ({ ...prev, progress: 30, status: 'Processing...' }));
       const result = await api.waitForJob(jobId, (progress, status, message) => {
+        if (signal.aborted) return;
         // Map progress from 30-100
         const mappedProgress = 30 + (progress * 0.7);
         const displayMessage = message || `Processing: ${status}`;
         setProcessing({ isProcessing: true, progress: mappedProgress, status: displayMessage });
-      });
+      }, signal);
 
       // Step 4: Set the result
       if (result) {
@@ -237,6 +246,10 @@ export function HomePage() {
         });
       }
     } catch (error) {
+      // A cancelled poll (new job started or unmount) is not a user-facing error.
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
       console.error('Processing error:', error);
       setProcessing({
         isProcessing: false,
@@ -262,8 +275,6 @@ export function HomePage() {
             dimensions={dimensions}
             onChange={handleDimensionChange}
             onBlur={handleDimensionBlur}
-            smartBoundaries={smartBoundaries}
-            onSmartBoundariesChange={handleSmartBoundariesChange}
             balancedCutting={balancedCutting}
             onBalancedCuttingChange={handleBalancedCuttingChange}
             alignmentHoles={alignmentHoles}
@@ -293,6 +304,7 @@ export function HomePage() {
           <STLPreview
             file={selectedFile}
             dimensions={debouncedDimensions}
+            balancedCutting={balancedCutting}
             processingResult={lastResult}
             splitPositions={splitPositions}
             onSplitPositionsChange={handleSplitPositionsChange}

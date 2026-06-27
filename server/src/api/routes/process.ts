@@ -2,6 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { addProcessingJob } from '../../worker/queue';
 import { ProcessingJobData } from '../../types/job';
+import { isValidFileId, isValidDimension } from '../validation';
 
 const router = express.Router();
 
@@ -11,15 +12,19 @@ const router = express.Router();
  */
 router.post('/', async (req, res) => {
   try {
-    const { fileId, fileName, dimensions, smartBoundaries, balancedCutting, alignmentHoles, splitPositions } = req.body;
+    const { fileId, fileName, dimensions, balancedCutting, alignmentHoles, splitPositions } = req.body;
 
     // Validate required fields
     if (!fileId || !fileName || !dimensions) {
       return res.status(400).json({ error: 'Missing required fields: fileId, fileName, dimensions' });
     }
 
-    if (!dimensions.x || !dimensions.y || !dimensions.z) {
-      return res.status(400).json({ error: 'Dimensions must include x, y, and z values' });
+    if (!isValidFileId(fileId)) {
+      return res.status(400).json({ error: 'Invalid fileId' });
+    }
+
+    if (!isValidDimension(dimensions.x) || !isValidDimension(dimensions.y) || !isValidDimension(dimensions.z)) {
+      return res.status(400).json({ error: 'Dimensions x, y, and z must be positive numbers' });
     }
 
     // Validate splitPositions if provided
@@ -40,7 +45,6 @@ router.post('/', async (req, res) => {
       fileId,
       fileName,
       dimensions,
-      smartBoundaries: smartBoundaries !== undefined ? smartBoundaries : true,
       balancedCutting: balancedCutting !== undefined ? balancedCutting : true,
       alignmentHoles: alignmentHoles || {
         enabled: false,

@@ -7,13 +7,13 @@ export interface ProcessingOptions {
   fileId: string;
   fileName: string;
   dimensions: { x: number; y: number; z: number };
-  smartBoundaries?: boolean;
   balancedCutting?: boolean;
   alignmentHoles?: {
     enabled: boolean;
     diameter: number;
     depth: number;
     spacing?: 'sparse' | 'normal' | 'dense';
+    adaptivePlacement?: boolean;
   };
   splitPositions?: { x: number[]; y: number[]; z: number[] };
 }
@@ -115,11 +115,31 @@ class PrintSplitAPI {
     const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`);
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to get job status');
+      // The body may not be JSON (e.g. a rate-limiter 429), so parse defensively.
+      const message = await this.readErrorMessage(response, 'Failed to get job status');
+      const err = new Error(message) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
     }
 
     return response.json();
+  }
+
+  /**
+   * Extract an error message from a non-OK response, tolerating non-JSON bodies.
+   */
+  private async readErrorMessage(response: Response, fallback: string): Promise<string> {
+    try {
+      const text = await response.text();
+      try {
+        const parsed = JSON.parse(text);
+        return parsed.error || text || fallback;
+      } catch {
+        return text || fallback;
+      }
+    } catch {
+      return fallback;
+    }
   }
 
   /**
@@ -127,29 +147,62 @@ class PrintSplitAPI {
    */
   async waitForJob(
     jobId: string,
-    onProgress?: (progress: number, status: string, message?: string) => void
+    onProgress?: (progress: number, status: string, message?: string) => void,
+    signal?: AbortSignal
   ): Promise<JobStatus['result']> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('Polling aborted', 'AbortError'));
+        return;
+      }
+
+      const cleanup = () => {
+        clearInterval(interval);
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException('Polling aborted', 'AbortError'));
+      };
+
+      signal?.addEventListener('abort', onAbort);
+
+      // A long job produces many polls; tolerate transient failures (e.g. a
+      // rate-limit 429 or a brief network blip) instead of killing the job the
+      // server is still working on. Only give up after several in a row.
+      let consecutiveFailures = 0;
+      const maxConsecutiveFailures = 5;
+
       const interval = setInterval(async () => {
         try {
           const status = await this.getJobStatus(jobId);
+          consecutiveFailures = 0;
+
+          // The caller may have aborted while the request was in flight.
+          if (signal?.aborted) return;
 
           if (onProgress) {
             onProgress(status.progress, status.state, status.progressMessage);
           }
 
           if (status.state === 'completed') {
-            clearInterval(interval);
+            cleanup();
             resolve(status.result);
           } else if (status.state === 'failed') {
-            clearInterval(interval);
+            cleanup();
             reject(new Error(status.error || 'Job failed'));
           }
         } catch (error) {
-          clearInterval(interval);
+          consecutiveFailures++;
+          if (consecutiveFailures < maxConsecutiveFailures) {
+            // Transient — keep polling.
+            return;
+          }
+          cleanup();
           reject(error);
         }
-      }, 1000); // Poll every second
+      }, 2000); // Poll every 2s — keeps long jobs well under the request rate limit
     });
   }
 

@@ -14,10 +14,15 @@ export async function validateSTLMesh(file: File): Promise<MeshValidation> {
   const buffer = await file.arrayBuffer();
   const dataView = new DataView(buffer);
 
-  // Determine if binary or ASCII
+  // Determine if binary or ASCII. The size formula alone is unreliable (a
+  // binary file with trailing bytes would be mis-read as ASCII and yield an
+  // empty mesh), so also check for the ASCII "solid" marker. Binary headers
+  // can coincidentally start with "solid", so a size match takes precedence.
   const triangleCount = dataView.getUint32(80, true);
   const expectedSize = 80 + 4 + triangleCount * 50;
-  const isBinary = buffer.byteLength === expectedSize;
+  const header = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength)));
+  const startsWithSolid = header.toLowerCase() === 'solid';
+  const isBinary = buffer.byteLength === expectedSize || !startsWithSolid;
 
   let vertices: number[];
   let triangleIndices: number[];

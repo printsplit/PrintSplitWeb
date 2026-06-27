@@ -1,5 +1,6 @@
 import express from 'express';
 import { getStorageClient } from '../../storage/minio-client';
+import { isValidJobId, isValidPartName } from '../validation';
 
 const router = express.Router();
 const storage = getStorageClient();
@@ -12,6 +13,9 @@ const storage = getStorageClient();
 router.get('/:jobId/all', async (req, res) => {
   try {
     const { jobId } = req.params;
+    if (!isValidJobId(jobId)) {
+      return res.status(400).json({ error: 'Invalid jobId' });
+    }
     const zipObjectName = `${jobId}/all-parts.zip`;
 
     // Check if ZIP exists
@@ -43,6 +47,9 @@ router.get('/:jobId/all', async (req, res) => {
 router.get('/:jobId/:partName', async (req, res) => {
   try {
     const { jobId, partName } = req.params;
+    if (!isValidJobId(jobId) || !isValidPartName(partName)) {
+      return res.status(400).json({ error: 'Invalid jobId or partName' });
+    }
     const objectName = `${jobId}/${partName}`;
 
     // Check if file exists
@@ -74,6 +81,9 @@ router.get('/:jobId/:partName', async (req, res) => {
 router.get('/:jobId/url/:partName', async (req, res) => {
   try {
     const { jobId, partName } = req.params;
+    if (!isValidJobId(jobId) || !isValidPartName(partName)) {
+      return res.status(400).json({ error: 'Invalid jobId or partName' });
+    }
     const objectName = `${jobId}/${partName}`;
 
     // Check if file exists

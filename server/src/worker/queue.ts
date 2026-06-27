@@ -56,6 +56,13 @@ export async function cancelJob(jobId: string): Promise<void> {
   }
 }
 
+export async function cancelRepairJob(jobId: string): Promise<void> {
+  const job = await repairQueue.getJob(jobId);
+  if (job) {
+    await job.remove();
+  }
+}
+
 export async function getQueueStats() {
   const [waiting, active, completed, failed] = await Promise.all([
     processingQueue.getWaitingCount(),

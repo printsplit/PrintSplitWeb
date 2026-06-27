@@ -64,7 +64,7 @@ export class MinioStorage {
       'Content-Length': buffer.length,
     };
 
-    return await this.client.putObject(targetBucket, objectName, buffer, metaData);
+    return await this.client.putObject(targetBucket, objectName, buffer, buffer.length, metaData);
   }
 
   /**
@@ -88,19 +88,14 @@ export class MinioStorage {
   ): Promise<Buffer> {
     const targetBucket = bucket === 'upload' ? this.uploadBucket : this.resultsBucket;
 
+    // minio 8 returns a Promise<Readable> instead of taking a callback.
+    const stream = await this.client.getObject(targetBucket, objectName);
+
     return new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
-
-      this.client.getObject(targetBucket, objectName, (err, stream) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        stream.on('end', () => resolve(Buffer.concat(chunks)));
-        stream.on('error', reject);
-      });
+      stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
     });
   }
 
@@ -175,7 +170,7 @@ export class MinioStorage {
       await this.client.statObject(targetBucket, objectName);
       return true;
     } catch (err: any) {
-      if (err.code === 'NotFound') {
+      if (err.code === 'NotFound' || err.code === 'NoSuchKey') {
         return false;
       }
       throw err;
